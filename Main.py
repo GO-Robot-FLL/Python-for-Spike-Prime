@@ -58,7 +58,7 @@ movement_motors = MotorPair('C', 'B') #adjust the ports until they match your co
 cancel = False
 
 
-def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart, side , sensorPort, driveToLinePort = 0, lightValue = 0, detectLineStart = 0, offset = 0):
+def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart, side , sensorPort, driveToLinePort = 0, lightValue = 0, detectLineStart = 0,):
     """
         This is the function that we use to let the robot follow a black line until either the entered distance has been achieved or the other sensor of the robot senses a line.
         It can accelerate, it can slow down, and there's also PID
@@ -87,8 +87,6 @@ def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart,
         lightvalue: Tells the program what lightvalue needs to be reached on the driveToLinePort as an EndCondition. Type: Integer
 
         detectLineStart: The value which we use to tell the robot after what percentage of the distance we need to look for the line to drive to. Type: Float. Default: 0
-
-        offset: Addon to the steering value to bias Robots direction in one direction. Type: Integer
     """
     
     #Set default values
@@ -148,7 +146,7 @@ def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart,
 
         #Steering factor calculation using PID, sets new I value
 
-        steering = (((change * pReglerLight) + (integral * iReglerLight) + (dReglerLight * (change - old_change))) + offset) * invert
+        steering = (((change * pReglerLight) + (integral * iReglerLight) + (dReglerLight * (change - old_change)))) * invert
         integral = change + integral
         #Calculation of current speed for robot, used for acceleratiion, braking etc.
         speed = speedCalculation(speed, startspeed, maxspeed, endspeed, accelerateDistance, brakeStartValue, drivenDistance, oldDrivenDistance,)
@@ -178,63 +176,6 @@ def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart,
                     loop = False
 
     movement_motors.stop()
-    return
-
-def motorResistance(speed,widerstandswert,port1,port2 = 0):
-    """
-        This function can sense if a motor has stalled and then automatically stops it. This is useful for detecting if the robot has hit a wall or an arm has fully retreated.
-        Parameters
-        -------------
-        speed: The speed at which the robot drives. Type: Integer. Default Value: No default value
-
-        widerstandswert: If the speed is under this value then the robot stops completely. Type: Integer. Default value: No default value
-
-        port1: The port which is connected to the first motor. Type: String. Default value: No default value
-
-        port2: The port which is connected to the second motor. Type: String. Default value: No default value
-    """
-
-    if cancel:
-        return
-
-    #Sets variables
-    port1 = Motor(port1)
-    port2 = Motor(port2)
-    invertedspeed = speed * -1
-    rightMotor.start(speed)
-    leftMotor.start(invertedspeed)
-    speed1 = speed
-    speed2 = speed
-    timer = Timer()
-    timer.reset()
-    #Checking if one or both motors need to be monitored
-    if port2 == 0:
-        port1.start(speed)
-        #Checking for stalling
-        while True:
-            if speed1 < widerstandswert:
-                port1.stop()
-            else:
-                port1.start(speed)
-            #Updates speed1 variable to current speed for checking againgst widerstandswert
-            speed1 = port1.get_speed()
-    #Both motors need monitoring
-    else:
-        while True:
-            time = timer.now()
-            invertedspeed = speed * -1
-            if time >= 1:
-                port2.start(invertedspeed)
-                port1.start(speed)
-                #Stall detection and stopping based on current real speed levels vs. minimum allowed speed
-                if speed1 <= widerstandswert and speed2 <= widerstandswert:
-                    port1.stop()
-                    port2.stop()
-                    break
-                speed1 = port1.get_speed()
-                speed2 = port2.get_speed()
-                print(speed1)
-                print(speed2)
     return
 
 def gyroRotation(angle, startspeed, maxspeed, endspeed, addspeed, brakeStart, lightSensorPort = 0, lightValue = 0, variant = 0, detectLineStart = 0):
@@ -793,11 +734,30 @@ def example1(): #How to use the gyro straight drive
     return
 
 def example2(): #How to use the line follower
-    
-
+    lineFollower(20, 20, 40, 20, 0.2, 0.8, "left", "E")
+    """
+    This is the most basic line follower. The robot will follow the line for 20 centimeters if you adjusted the wheel circumference in the line follower.
+    The robot will start moving at a speed of 20, accelerate until it reaches a speed of 45 after 20% of the distance travelled and will start 
+    slowing down back to 20 after 80% of the distance has been travelled.
+    You have to specifiy the side of the line you want to go on, as this program keeps the robot on the edge of the line. This program is meant to be used 
+    when the edge of the line is black and white, though you can adjust the target light value as needed. The port specified, in this case "E" states which port
+    the robot uses to follow the line.
+    """
+    hub.left_button.wait_until_pressed()
+    lineFollower(20, 20, 40, 20, 0.2, 0.8, "left", "E", "F", 25)
+    """
+    This is the same as the first lineFollower except for the ending condition. This time, the robot stops when the "F" light sensor sees a value below 25. This is 
+    exactly the same as it is on the gyroStraightDrive. The driveToLinePort cannot be the following port, as this port is already in use for following the line.
+    """
+    hub.left_button.wait_until_pressed()
+    lineFollower(20, 20, 40, 20, 0.2, 0.8, "left", "E", "F", 25, 0.6)
+    """
+    This line follower is again similar to the gyroStraightDrive. The robot starts looking for the line after 60% of the distance has been travelled.
+    """
+    #parallel motor execution isn't implemented yet in the line follower, this feature will be patched in later though
     return
 
-def example3(): #How to use parallel code execution
+def example3():
     
     return
 
