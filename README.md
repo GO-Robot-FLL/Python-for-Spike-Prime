@@ -1,6 +1,7 @@
-# Cargo-Connect
-Newest GoRobot FLL Code for this years season. 
-After you have changed things, please commit the code and don't forget to push it to Github.
+# Python-for-Spike-Prime
+These are some basic programs that are useful if you are building and programming the LEGO SPIKE PRIME.
+We use this code for competing in the FLL. If there are any bugs or you have any questions please notify us.
+We strongly recommend that you use VS Code for your programming, the instructions for doing so are below.
 
 ## Fully charged battery voltage
 When the battery is fully charged the voltage is 8300.
