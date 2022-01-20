@@ -22,7 +22,6 @@ dReglerLight = 0.0
 #Preperation for parallel code execution
 accelerate = True
 run_generator = True
-
 runSmall = True
 
 
@@ -60,8 +59,9 @@ cancel = False
 
 def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart, side , sensorPort, driveToLinePort = 0, lightValue = 0, detectLineStart = 0,):
     """
-        This is the function that we use to let the robot follow a black line until either the entered distance has been achieved or the other sensor of the robot senses a line.
-        It can accelerate, it can slow down, and there's also PID
+        This is the function used to let the robot follow a line until either the entered distance has been achieved or the other sensor of the robot senses a line.
+        Like all functions that drive the robot this function has linear acceleration and breaking. It also uses PID values that are automatically set depending on the 
+        current speed of the robot (See function PIDCalculationLight)
 
         Parameters
         -------------
@@ -74,42 +74,44 @@ def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart,
 
         endspeed: The speed which the robot achieves at the end of the function. Type: Integer. Default: No default value
 
-        addspeed: The speed which the robot adds in order to accelerate. Type: Float. Default: No default value
+        addspeed: The percentage after which the robot reaches its maxspeed. Type: Float. Default: No default value
 
         brakeStart: The value which we use to tell the robot after what percentage of the distance we need to slow down. Type: Float. Default: No default value
 
-        side: Wich side of the line the robot should use left or right. Type: String
+        side: Wich side of the line the robot should use. Type: String Accpeted inputs: "left" "right"
 
-        sensorPort: This value tells the program which ColorSensor the robot should use to follow the line. Type: String
+        sensorPort: This value tells the program which ColorSensor the robot should use to follow the line. Type: String. Accepted inputs: "E", "F"
 
-        driveToLinePort: Tells the program if it should stop if it sees a light value on the specified sensor. Type: String
+        driveToLinePort: Tells the program if it should stop if it sees a light value on the specified sensor. Type: String. Accpeted inputs: "E", "F"
 
         lightvalue: Tells the program what lightvalue needs to be reached on the driveToLinePort as an EndCondition. Type: Integer
 
         detectLineStart: The value which we use to tell the robot after what percentage of the distance we need to look for the line to drive to. Type: Float. Default: 0
     """
-    
-    #Set default values
+    #start of break function implementation, used to cancel current program without terminating main
     if cancel:
         return
-
+    #set the speed the robot starts at
     speed = startspeed
-
+    #reset PID values to eliminate bugs
     change = 0
     old_change = 0
     integral = 0
+    #reset the driven distance of the robot to eliminate bugs
     drivenDistance = 0
-
+    #specifies the color sensor
     colorsensor = ColorSensor(sensorPort)
-
+    #Get degrees of motors turned before robot has moved, allows for distance calculation without resetting motors
     loop = True
-    b_Startwert = - leftMotor.get_degrees_counted()
-    c_Startwert = rightMotor.get_degrees_counted()
-    #Calculate target values for motors to turn in degrees
+    b_Startvalue = - leftMotor.get_degrees_counted()
+    c_Startvalue = rightMotor.get_degrees_counted()
+    #Going backwards is not supported on our robot due to the motors then being in front of the colour sensors and the program not working
     if distance < 0:
         print('ERR: distance < 0')
         distance = abs(distance)
+    #Calculate target values for the motors to turn to
     rotateDistance = (distance / 17.6) * 360
+    #Calculate after what distance the robot has to reach max speed
     accelerateDistance = rotateDistance * addspeed
 
     invert = 1
@@ -137,7 +139,7 @@ def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart,
     while loop:
         #Checks the driven distance as an average of both motors for increased accuracy
         oldDrivenDistance = drivenDistance
-        drivenDistance = abs(((- leftMotor.get_degrees_counted() - b_Startwert) + (rightMotor.get_degrees_counted() - c_Startwert)) / 2)
+        drivenDistance = abs(((- leftMotor.get_degrees_counted() - b_Startvalue) + (rightMotor.get_degrees_counted() - c_Startvalue)) / 2)
 
         #Calculates target value for Robot as the edge of black and white lines
         old_change = change
@@ -402,8 +404,8 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
 
     #Sets values based on user inputs
     loop = True
-    b_Startwert = - leftMotor.get_degrees_counted()
-    c_Startwert = rightMotor.get_degrees_counted()
+    b_Startvalue = - leftMotor.get_degrees_counted()
+    c_Startvalue = rightMotor.get_degrees_counted()
     hub.motion_sensor.reset_yaw_angle() #Yaw angle used due to orientation of the hub. This might need to be changed
 
     #Error check for distance
@@ -439,7 +441,7 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
 
         #Calculation of driven distance and PID values
         oldDrivenDistance = drivenDistance
-        drivenDistance = ((- leftMotor.get_degrees_counted() - b_Startwert) + (rightMotor.get_degrees_counted() - c_Startwert)) / 2
+        drivenDistance = ((- leftMotor.get_degrees_counted() - b_Startvalue) + (rightMotor.get_degrees_counted() - c_Startvalue)) / 2
 
         change = hub.motion_sensor.get_yaw_angle() #yaw angle used due to orientation of the hub
         steering = ((change * pRegler) + (integral * iRegler) + (dRegler * (change - old_change))) + offset
@@ -657,7 +659,7 @@ def driveMotor(rotations, speed, port):
     yield
 
 def pidCalculation(speed):
-
+    #golbally sets PID values based on current speed of the robot, allows for fast and accurate driving
     global pRegler
     global iRegler
     global dRegler
@@ -674,21 +676,24 @@ def pidCalculation(speed):
         dRegler = 10
 
 def pidCalculationLight(speed):
+    #Sets the PID values for the lineFollower based on current speed. Allows for accurate and fast driving
     #Important note: these PID values are experimental and based on our design for the robot. You will need to adjust them. See above on how to do so
     global pReglerLight
     global dReglerLight
 
     pReglerLight = -0.04 * speed + 4.11
     dReglerLight = 0.98 * speed - 34.2
-
+    #set hard bottom for d value, as otherwise the values don't work
     if dReglerLight < 5:
         dReglerLight = 5
 
 
 
-
-
-
+"""
+This is an introduction on how to use the driving programs. For accurate driving you will need to adjust the PID values to fit your 
+robot and speeds you go at. There are tutorials online on how to do this. (For example see: https://www.youtube.com/watch?v=AMBWV_HGYj4 )
+We recommend that you try to align yourself both with lines but also mechanically for example with walls or mission tasks on the mat.
+"""
 
 def example1(): #How to use the gyro straight drive
     gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8) 
@@ -757,10 +762,10 @@ def example2(): #How to use the line follower
     #parallel motor execution isn't implemented yet in the line follower, this feature will be patched in later though
     return
 
-def example3():
+def example3(): #test out your own programs
     
     return
-
+#shows the battery colours in different colours on the console if the voltage is low and the battery should be charged
 class bcolors:
     BATTERY = '\033[32m'
     BATTERY_LOW = '\033[31m'
@@ -801,11 +806,11 @@ hub.light_matrix.write(programselect)
 while program:
     cancel = False
     #Program selection
-    if hub.right_button.is_pressed(): #press right button to cycle through programs. cycling back isn't supported yet, but we are working on reallocating the buttons in the file system
-        wait_for_seconds(0.15)
+    if  hub.right_button.is_pressed(): #press right button to cycle through programs. cycling back isn't supported yet, but we are working on reallocating the buttons in the file system
+        wait_for_seconds(0.15) #waiting prevents a single button press to be registered as multiple clicks
         programselect = programselect + 1
-        hub.light_matrix.write(programselect)
-        hub.speaker.beep(85, 0.1)
+        hub.light_matrix.write(programselect) #show current selcted program
+        hub.speaker.beep(85, 0.1) #give audio feedback for user
 
         if programselect == 1:
             hub.status_light.on('blue')
@@ -813,7 +818,7 @@ while program:
             hub.status_light.on('black')
         elif programselect == 3:
             hub.status_light.on('white')
-        if programselect == 4:
+        if programselect == 4: #Add more slots as necessary, you will need to match the amount of slots to the starting slots
             programselect = 1
             hub.light_matrix.write(programselect)
             hub.status_light.on('blue')
@@ -837,6 +842,6 @@ while program:
             hub.light_matrix.show_image("DUCK")
             example3() 
             hub.light_matrix.write(programselect) #add more slots for programs as you wish
-programselect=0
+programselect=0 #reset variable to prevent bugs with multiple runs
 
 sys.exit("ended program successfully")
