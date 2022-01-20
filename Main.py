@@ -60,7 +60,7 @@ cancel = False
 def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart, side , sensorPort, driveToLinePort = 0, lightValue = 0, detectLineStart = 0,):
     """
         This is the function used to let the robot follow a line until either the entered distance has been achieved or the other sensor of the robot senses a line.
-        Like all functions that drive the robot this function has linear acceleration and breaking. It also uses PID values that are automatically set depending on the 
+        Like all functions that drive the robot this function has linear acceleration and breaking. It also uses PID values that are automatically set depending on the
         current speed of the robot (See function PIDCalculationLight)
 
         Parameters
@@ -431,7 +431,7 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
     #Robot drives while loop = true
 
     while loop:
-        
+
         if run_generator: #run parallel code execution
             next(generator)
 
@@ -626,6 +626,9 @@ def speedCalculation(speed, startspeed, maxspeed, endspeed, accelerateDistance, 
 
     return speed
 
+def breakFunction():
+    return False
+
 def driveMotor(rotations, speed, port):
     """
     Allows you to drive a small motor in parallel to driving with gyroStraightDrive
@@ -690,46 +693,46 @@ def pidCalculationLight(speed):
 
 
 """
-This is an introduction on how to use the driving programs. For accurate driving you will need to adjust the PID values to fit your 
+This is an introduction on how to use the driving programs. For accurate driving you will need to adjust the PID values to fit your
 robot and speeds you go at. There are tutorials online on how to do this. (For example see: https://www.youtube.com/watch?v=AMBWV_HGYj4 )
 We recommend that you try to align yourself both with lines but also mechanically for example with walls or mission tasks on the mat.
 """
 
 def example1(): #How to use the gyro straight drive
-    gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8) 
+    gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8)
     """
-    Most basic driving. The robot will go in a straight line for 20 centimeters if you adjusted the wheel circumference in the gyroStraighDrive. 
-    The robot will start moving at a speed of 20, accelerate until it reaches a speed of 45 after 20% of the distance travelled and will start 
+    Most basic driving. The robot will go in a straight line for 20 centimeters if you adjusted the wheel circumference in the gyroStraighDrive.
+    The robot will start moving at a speed of 20, accelerate until it reaches a speed of 45 after 20% of the distance travelled and will start
     slowing down back to 20 after 80% of the distance has been travelled.
     By default all over values are set to 0 to reduce the amount of code
     """
-    hub.left_button.wait_until_pressed()
-    gyroStraightDrive(20,20,45,20,0.2, 0.8, "E", 25) 
+    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
+    gyroStraightDrive(20,20,45,20,0.2, 0.8, "E", 25)
     """
-    This is the same as before, but this time the robot stops when the light sensor on port E sees a light value lower than 25, in this case a black line. 
+    This is the same as before, but this time the robot stops when the light sensor on port E sees a light value lower than 25, in this case a black line.
     The port can be adapted to any light sensor, as can the value. If it is under 50, the robot will stop at light values lower than 50, if it is above 50
     then the robot looks for a light value greater than 50, for example a white line
     """
-    hub.left_button.wait_until_pressed()
-    gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8, lightValue=25 variant=1)
+    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
+    gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8, 0,25, 1)
     """
-    This is the same as the first gyroStraightDrive but the robot stops as soon as it sees a line, it doesn't matter on which port. As soon as the robot has 
-    stopped, it drives the corresponding motor until the other light sensor also sees the specified light value. Be careful here, as internal lag can cause 
+    This is the same as the first gyroStraightDrive but the robot stops as soon as it sees a line, it doesn't matter on which port. As soon as the robot has
+    stopped, it drives the corresponding motor until the other light sensor also sees the specified light value. Be careful here, as internal lag can cause
     the robot to overshoot the line, so make sure that you set your speed values accordingly
     """
-    hub.left_button.wait_until_pressed()
+    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
     gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8, "E", 25, detectLineStart=0.6)
     """
     The robot will drive until it sees a line, as in the second gyroStraightDrive. However it only starts checking for the specified light value after 80% of the
     distance has been driven. This is very useful if you want to skip lines but still drive with one function
     """
-    hub.left_button.wait_until_pressed()
+    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
     gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8, offset=20)
     """
     This is the same as the basic driving of the first gyroStraightDrive. However the robot won't go straight but aim for a target value of 20
     """
-    hub.left_button.wait_until_pressed()
-    generator = driveMotor(5, 100, 'A')
+    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
+    generator = driveMotor(5, 100, 'A') #Prepares parallel code execution to be run in next gyroStraightDrive
     gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8,generator=generator)
     """
     This is the same as the basic driving of the first gyroStraightDrive. However while it drives the robot also turns the "A" motor for 5 rotations.
@@ -742,19 +745,19 @@ def example2(): #How to use the line follower
     lineFollower(20, 20, 40, 20, 0.2, 0.8, "left", "E")
     """
     This is the most basic line follower. The robot will follow the line for 20 centimeters if you adjusted the wheel circumference in the line follower.
-    The robot will start moving at a speed of 20, accelerate until it reaches a speed of 45 after 20% of the distance travelled and will start 
+    The robot will start moving at a speed of 20, accelerate until it reaches a speed of 45 after 20% of the distance travelled and will start
     slowing down back to 20 after 80% of the distance has been travelled.
-    You have to specifiy the side of the line you want to go on, as this program keeps the robot on the edge of the line. This program is meant to be used 
+    You have to specifiy the side of the line you want to go on, as this program keeps the robot on the edge of the line. This program is meant to be used
     when the edge of the line is black and white, though you can adjust the target light value as needed. The port specified, in this case "E" states which port
     the robot uses to follow the line.
     """
-    hub.left_button.wait_until_pressed()
+    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
     lineFollower(20, 20, 40, 20, 0.2, 0.8, "left", "E", "F", 25)
     """
-    This is the same as the first lineFollower except for the ending condition. This time, the robot stops when the "F" light sensor sees a value below 25. This is 
+    This is the same as the first lineFollower except for the ending condition. This time, the robot stops when the "F" light sensor sees a value below 25. This is
     exactly the same as it is on the gyroStraightDrive. The driveToLinePort cannot be the following port, as this port is already in use for following the line.
     """
-    hub.left_button.wait_until_pressed()
+    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
     lineFollower(20, 20, 40, 20, 0.2, 0.8, "left", "E", "F", 25, 0.6)
     """
     This line follower is again similar to the gyroStraightDrive. The robot starts looking for the line after 60% of the distance has been travelled.
@@ -763,7 +766,7 @@ def example2(): #How to use the line follower
     return
 
 def example3(): #test out your own programs
-    
+
     return
 #shows the battery colours in different colours on the console if the voltage is low and the battery should be charged
 class bcolors:
@@ -806,7 +809,7 @@ hub.light_matrix.write(programselect)
 while program:
     cancel = False
     #Program selection
-    if  hub.right_button.is_pressed(): #press right button to cycle through programs. cycling back isn't supported yet, but we are working on reallocating the buttons in the file system
+    if hub.right_button.is_pressed(): #press right button to cycle through programs. cycling back isn't supported yet, but we are working on reallocating the buttons in the file system
         wait_for_seconds(0.15) #waiting prevents a single button press to be registered as multiple clicks
         programselect = programselect + 1
         hub.light_matrix.write(programselect) #show current selcted program
@@ -840,7 +843,7 @@ while program:
             hub.light_matrix.write(programselect)
         elif programselect == 3: #starts third attachement
             hub.light_matrix.show_image("DUCK")
-            example3() 
+            example3()
             hub.light_matrix.write(programselect) #add more slots for programs as you wish
 programselect=0 #reset variable to prevent bugs with multiple runs
 
