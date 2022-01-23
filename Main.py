@@ -765,8 +765,31 @@ def example2(): #How to use the line follower
     #parallel motor execution isn't implemented yet in the line follower, this feature will be patched in later though
     return
 
-def example3(): #test out your own programs
+def example3(): #How to use the gyro rotation
+    gyroRotation(90, 20, 35, 20, 0.2, 0.8)
+    """
+    This is the most basic gyroRotation. The robot will turn clockwise 90°. It will start at a speed of 20 reach 35 after 20% of the angle has been reached and will 
+    start slowing down to 20 after 80% of the angle haas been turned. Using this variant, the robot will turn on the spot.
+    All other variables are set to be 0 to reduce the amount of code
+    """
+    gyroRotation(90, 20, 35, 20, 0.2, 0.8, "E", 30)
+    """
+    This is the same gyroRotation as in the first example. However the robot will also check for a light value less than 30 on the "E" light sensor. It will stop when 
+    it has reached one of the ending conditions
+    """
+    gyroRotation(90, 20, 35, 20, 0.2, 0.8, variant=1)
+    """
+    This is the same gyroRotation as in the first example. However, rather than turning on the spot it will only rotate the outer motor to turn in a curve like shape
+    """
+    gyroRotation(90, 20, 35, 20, 0.2, 0.8, "E", 30, detectLineStart=0.8)
+    """
+    This is the same gyroRotation as in the second example. However the robot will only start checking for the light value after 80% of the angle has been reached. 
+    This is useful when the robot also sweeps over areas of the same color but you don't want the robot to stop there
+    """
+    return
 
+def example4(): #Write your own programs here
+    
     return
 #shows the battery colours in different colours on the console if the voltage is low and the battery should be charged
 class bcolors:
@@ -821,7 +844,9 @@ while program:
             hub.status_light.on('black')
         elif programselect == 3:
             hub.status_light.on('white')
-        if programselect == 4: #Add more slots as necessary, you will need to match the amount of slots to the starting slots
+        elif programselect == 4:
+            hub.status_light.on("red")
+        if programselect == 5: #Add more slots as necessary, you will need to match the amount of slots to the starting slots
             programselect = 1
             hub.light_matrix.write(programselect)
             hub.status_light.on('blue')
@@ -829,21 +854,25 @@ while program:
     #Program start
     if hub.left_button.is_pressed(): #press left button to start the selected program
         hub.speaker.beep(85, 0.1)
-        if programselect == 1: #starts first attachement
+        if programselect == 1: #starts first program
             hub.light_matrix.show_image("DUCK")
             example1()
             programselect = 2
             hub.status_light.on("black")
             hub.light_matrix.write(programselect)
-        elif programselect == 2: #starts second attachement
+        elif programselect == 2: #starts second program
             hub.light_matrix.show_image("DUCK")
             example2()
             programselect = 3
             hub.status_light.on("white")
             hub.light_matrix.write(programselect)
-        elif programselect == 3: #starts third attachement
+        elif programselect == 3: #starts third program
             hub.light_matrix.show_image("DUCK")
             example3()
+            hub.light_matrix.write(programselect)
+        elif programselect == 4: #starts fourth program
+            hub.light_matrix.show_image("DUCK")
+            example4()
             hub.light_matrix.write(programselect) #add more slots for programs as you wish
 programselect=0 #reset variable to prevent bugs with multiple runs
 
