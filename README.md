@@ -4,6 +4,23 @@ We use this code for competing in the FLL. If there are any bugs or you have any
 We strongly recommend that you use VS Code for your programming, the instructions for doing so are below.
 You can however also paste this into the SPIKE or MINDSTORMS software.
 
+## Programs and Features included
+#### Linefollower 
+- follows line until specified color/distance is reached
+- acceleration/braking
+- dynamic PID control for smooth driving
+#### Gyrorotation
+- turns until specified color/angle is reached
+- acceleration/braking
+- different turning styles (on the spot/curve)
+#### Gyrostraightdrive
+- drives in a straight line until specified distance/color is reached
+- accelerating/braking
+- dynamic PID control for smooth driving
+- alignment with lines
+- parallel code execution for turning motors while driving
+
+
 ## Necessary extensions/Programs for use in VS Code:
 Visual Studio Code
 Python
