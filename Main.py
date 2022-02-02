@@ -5,8 +5,6 @@ from spike.control import wait_for_seconds, wait_until, Timer
 from hub import battery
 from util import log
 
-
-import util
 import math
 import sys
 
@@ -23,7 +21,6 @@ dReglerLight = 0.0
 accelerate = True
 run_generator = True
 runSmall = True
-
 
 # Create your objects here.
 hub = PrimeHub()
@@ -44,7 +41,9 @@ right sensor: port E
 colorE = ColorSensor('E') #adjust the sensor ports until they match your configuration, we recommend assigning your ports to the ones in the program for ease of use
 colorF = ColorSensor('F')
 
-
+#Set variables based on robot
+circumference = 17.6 #circumference of the wheel powered by the robot in cm
+sensordistance = 6.4 #distance between the two light sensors in cm. Used in Tangent alignment
 
 
 """
@@ -110,7 +109,7 @@ def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart,
         print('ERR: distance < 0')
         distance = abs(distance)
     #Calculate target values for the motors to turn to
-    rotateDistance = (distance / 17.6) * 360
+    rotateDistance = (distance / circumference) * 360
     #Calculate after what distance the robot has to reach max speed
     accelerateDistance = rotateDistance * addspeed
 
@@ -234,8 +233,7 @@ def gyroRotation(angle, startspeed, maxspeed, endspeed, addspeed, brakeStart, li
     deccelerateDistance = abs(angle *(1 - brakeStart))
 
     #gyro sensor calibration
-    #336/360 is experimental value based on turning the robot for 10 rotations
-    angle = angle * (336/360)
+    angle = angle * (336/360) #336/360 is experimental value based on turning the robot for 10 rotations
 
     #Setting variables based on inputs
     loop = True
@@ -362,7 +360,7 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
 
         lightValue: This value tells the program the value the robot should stop at if port sees it. Type: Integer. Default: 0
 
-        variant: Tells the robot to align itself to a line if it sees one. 0: No alignment. 1: alignment. Type: Integer. Default: 0
+        variant: Tells the robot to align itself to a line if it sees one. 0: No alignment. 1: alignment using just light sensors 2: alignment using tangent alignment. Type: Integer. Default: 0
 
         detectLineStart: The value which we use to tell the robot after what percentage of the distance we need to look for the line to drive to. Type: Float. Default: 0
 
@@ -371,7 +369,7 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
         generator: Function executed while robot is executing gyroStraightDrive. Write the wanted function and its parameters here. Type: . Default: 0
     """
 
-    #Debugging of speed values so that robot always reaches end. Based on experimental values
+    #Debugging of speed values so that robot always reaches end. Based on experimental values for our robot
     if (startspeed < 17 and startspeed > 0):
         print("startspeed should never be less than 17")
         startspeed = 17
@@ -387,7 +385,7 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
 
     if cancel:
         return
-
+    #Preperation for parallel code execution
     global run_generator
     global runSmall
 
@@ -414,20 +412,20 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
         distance = abs(distance)
 
     #Calulation of degrees the motors should turn to
-    #17.6 is wheel circumference in cm. You might need to adapt it
-    rotateDistance = (distance / 17.6) * 360
+    rotateDistance = (distance / circumference) * 360
     accelerateDistance = rotateDistance * addspeed
-
-
+    invert = 1
 
     #Inversion of target rotation value for negative values
     if speed < 0:
         rotateDistance = rotateDistance * -1
+        invert = -1
 
     #Calculation of braking point
     brakeStartValue = brakeStart * rotateDistance
     detectLineStartValue = detectLineStart * rotateDistance
-
+    detectedLineDistance = 0
+    detectedPort = ''
     #Robot drives while loop = true
 
     while loop:
@@ -435,13 +433,12 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
         if run_generator: #run parallel code execution
             next(generator)
 
-
         if breakFunction() or not loop:
             break
 
         #Calculation of driven distance and PID values
         oldDrivenDistance = drivenDistance
-        drivenDistance = ((- leftMotor.get_degrees_counted() - b_Startvalue) + (rightMotor.get_degrees_counted() - c_Startvalue)) / 2
+        drivenDistance = ((- leftMotor.get_degrees_counted() - b_Startvalue) + (rightMotor.get_degrees_counted() - c_Startvalue)) / 2 #using average value between motors for increased accuracy
 
         change = hub.motion_sensor.get_yaw_angle() #yaw angle used due to orientation of the hub
         steering = ((change * pRegler) + (integral * iRegler) + (dRegler * (change - old_change))) + offset
@@ -458,19 +455,18 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
         if variant == 1:
             #Colour sensor E sees light first and triggers
             if colorE.get_reflected_light() < lightValue:
-
-
-                rightMotor.stop()
+                movement_motors.stop()
                 #Turning robot so that other colour sensor is over line
                 while True:
-                    leftMotor.start_at_power(- int(speed))
+
+                    leftMotor.start_at_power(-int(speed))
 
                     #Line detection and stopping
                     if colorF.get_reflected_light() < lightValue or breakFunction():
                         leftMotor.stop()
                         loop = False
                         break
-
+                break
             #Colour sensor F sees line first
             elif colorF.get_reflected_light() < lightValue:
 
@@ -485,61 +481,67 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
                         loop = False
                         break
 
-            #Second ending condition: specified distance has been reached and line wasn't detected
-            else:
-                if speed > 0:
-                    rightMotor.start_at_power(int(speed))
-                    leftMotor.start_at_power(- int(speed))
-                    if rotateDistance < drivenDistance:
-                        loop = False
-                else:
-                    rightMotor.start_at_power(int(speed))
-                    leftMotor.start_at_power(- int(speed))
+        elif variant == 2:
+            #tangent based line detection
 
-                    if rotateDistance > drivenDistance:
-                        loop = False
+            #Colour sensor E sees light first and triggers
+            if colorE.get_reflected_light() < lightValue:
+                #measuring the distance the robot has driven since it has seen the line
+                if(detectedLineDistance == 0):
+                    detectedLineDistance = drivenDistance
+                    detectedPort = 'E'
+
+                elif detectedPort == 'F':
+                    movement_motors.stop() #Stops robot with sensor F on the line
+                    angle = math.degrees(math.atan(((drivenDistance - detectedLineDistance) / 360 * circumference) / sensordistance)) #Calculating angle that needs to be turned using tangent
+                    gyroRotation(-1 * angle, -invert * 25, -invert * 30, -invert * 25, 0.2, 0.7, variant=1) #Standard gyrorotation for alignment, but inverting speed values if necessary
+                    movement_motors.stop() #Stopping robot for increased reliability
+                    break                
+
+            #Colour sensor F sees line first
+            elif colorF.get_reflected_light() < lightValue:
+                #measuring the distnace the robot has driven since it has seen the line
+                if(detectedLineDistance == 0):
+                    detectedLineDistance = drivenDistance
+                    detectedPort = 'F'
+
+                elif detectedPort == 'E':
+                    movement_motors.stop() #Stops robot with sensor E on the line
+                    angle = math.degrees(math.atan(((drivenDistance - detectedLineDistance) / 360 * circumference) / sensordistance)) #Calculationg angle that needs to be turned using tangent
+                    gyroRotation(angle, -invert * 25, -invert * 30, -invert * 25, 0.2, 0.7, variant=1) #Standard gyrorotation for alignment, but inverting speed values if necessary
+                    movement_motors.stop() #Stopping robot for increased reliablity
+                    break
+                
 
         else:
             #Sets colour sensor port to port specified by user
+            if abs(detectLineStartValue) < abs(drivenDistance):
+                if port != 0:
+                    colorSensor = ColorSensor(port)
 
-            if speed > 0:
-                if detectLineStartValue < drivenDistance:
-                    if port != 0:
-                        colorSensor = ColorSensor(port)
-
-                        if lightValue < 50:
-                            #Stops loop based on colour detection
-                            if colorSensor.get_reflected_light() < lightValue:
-                                loop = False
-                        else:
-                            #Stops loop based on colour detection
-                            if colorSensor.get_reflected_light() > lightValue:
-                                loop = False
+                    if lightValue < 50:
+                        #Stops loop based on colour detection
+                        if colorSensor.get_reflected_light() < lightValue:
+                            loop = False
+                    else:
+                        #Stops loop based on colour detection
+                        if colorSensor.get_reflected_light() > lightValue:
+                            loop = False
 
 
                 #Calculation of speed and steering values
                 movement_motors.start_at_power(- int(speed), int(steering))
                 if rotateDistance < drivenDistance:
-                    loop = False
-            else:
-                if detectLineStartValue > drivenDistance:
-                    if port != 0:
-                        colorSensor = ColorSensor(port)
-
-                        #Stops loop based on colour detection
-                        if colorSensor.get_reflected_light() < lightValue:
-                            movement_motors.stop()
-                            loop = False
-                            break
-
-                #Calculation of speed and steering values, inversion of steering value for driving backwards
-                movement_motors.start_at_power(- int(speed), - int(steering))
-
-                if rotateDistance > drivenDistance:
                     movement_motors.stop()
                     loop = False
                     break
 
+        #Calculation of speed and steering values
+        movement_motors.start_at_power(- int(speed), invert * int(steering))
+        if abs(rotateDistance) < abs(drivenDistance):
+            movement_motors.stop()
+            loop = False
+            break
 
     #Stopping movement motors at the end of program for increased accuracy
     movement_motors.stop()
@@ -553,7 +555,7 @@ def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeS
 
 def speedCalculation(speed, startspeed, maxspeed, endspeed, accelerateDistance, brakeStartValue, drivenDistance, oldDrivenDistance):
     """
-        Used to calculate all the speeds in out programs. Done seperatly to reduce redundancy. Brakes and accelerates
+        Used to calculate all the speeds in out programs. Done seperatly to reduce redundancy. Brakes and accelerates. Is only meant to be accessed by programs
 
         Parameters
         -------------
@@ -575,54 +577,37 @@ def speedCalculation(speed, startspeed, maxspeed, endspeed, accelerateDistance, 
     if cancel:
         return
     #Calculation of speed values for positive speeds
-    if speed > 0:
-        if drivenDistance > 0:
-            #Calculation and detection of brake speed
-            if drivenDistance > brakeStartValue and speed > endspeed:
-                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance
-                speed = speed - (drivenDistance - oldDrivenDistance) * subSpeedPerDegree
-            #Acceleration during acceleration phase
-            elif speed < maxspeed:
-                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance
+    if speed > 0: #For positive speeds
+        if drivenDistance > 0: #For when starting value of motor is positive
+            if drivenDistance > brakeStartValue and speed > endspeed: #If robot is in breaking phase and faster than endspeed
+                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance #Calculation of slowing down factor per degree
+                speed = speed - (drivenDistance - oldDrivenDistance) * subSpeedPerDegree #Calculation of new speed
+            elif speed < maxspeed: #Else: robot must accelerate if maximum speed has not yet been reached
+                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance #Calculation of acceleration factor per degree
+                speed = speed + (drivenDistance - oldDrivenDistance) * addspeedPerDegree #Calculation of new speed
+        else: #For when starting value of motor is negative
+            if drivenDistance < brakeStartValue and speed > endspeed: #If robot is in breaking phase and faster than endspeed
+                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance #Calculation of slowing down factor per degree
+                speed = speed - (drivenDistance - oldDrivenDistance) * subSpeedPerDegree #Calculation of new speed
+            elif speed < maxspeed: #Else: robot must accelerate if maximum speed has not yet been reached
+                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance #Calculation of acceleration factor per degree
+                speed = speed + (drivenDistance - oldDrivenDistance) * addspeedPerDegree #Calculation of new speed
 
-                speed = speed + (drivenDistance - oldDrivenDistance) * addspeedPerDegree
-        #Calculation of speed values for positive speeds
-        else:
-            #Calculation and detection of brake speed
-            if drivenDistance < brakeStartValue and speed > endspeed:
-                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance
-
-                speed = speed - (drivenDistance - oldDrivenDistance) * subSpeedPerDegree
-            #Acceleration during acceleration phase
-            elif speed < maxspeed:
-                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance
-
-                speed = speed + (drivenDistance - oldDrivenDistance) * addspeedPerDegree
-            #Calculation of speed values for positive speeds
-
-    else:
-        if drivenDistance > 0:
-            #Calculation and detection of brake speed
-            if drivenDistance > brakeStartValue and speed < endspeed:
-                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance
-                speed = speed + (drivenDistance - oldDrivenDistance) * subSpeedPerDegree
-            #Acceleration during acceleration phase
-            elif speed > maxspeed:
-                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance
-                speed = speed - (drivenDistance - oldDrivenDistance) * addspeedPerDegree
-        else:
-
-            #Calculation and detection of brake speed
-            if drivenDistance < brakeStartValue and speed < endspeed:
-                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance
-
-                #speed = speed + (drivenDistance - oldDrivenDistance) * subSpeedPerDegree
-            #Acceleration during acceleration phase
-
-
-            elif speed > maxspeed:
-                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance
-                speed = speed - (drivenDistance - oldDrivenDistance) * addspeedPerDegree
+    else: #For negative speeds
+        if drivenDistance > 0: #For when starting value of motor is positive
+            if drivenDistance > brakeStartValue and speed < endspeed: #If robot is in breaking phase and faster than endspeed
+                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance #Calculation of slowing down factor per degree
+                speed = speed + (drivenDistance - oldDrivenDistance) * subSpeedPerDegree  #Calculation of new speed
+            elif speed > maxspeed: #Else: robot must accelerate if maximum speed has not yet been reached
+                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance #Calculation of acceleration factor per degree
+                speed = speed - (drivenDistance - oldDrivenDistance) * addspeedPerDegree  #Calculation of new speed
+        else: #For when starting value of motor is negative
+            if drivenDistance < brakeStartValue and speed < endspeed: #If robot is in breaking phase and faster than endspeed
+                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance #Calculation of slowing down factor per degree
+                speed = speed + (drivenDistance - oldDrivenDistance) * subSpeedPerDegree  #Calculation of new speed
+            elif speed > maxspeed: #Else: robot must accelerate if maximum speed has not yet been reached
+                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance #Calculation of acceleration factor per degree
+                speed = speed - (drivenDistance - oldDrivenDistance) * addspeedPerDegree  #Calculation of new speed
 
     return speed
 
@@ -674,7 +659,8 @@ def pidCalculation(speed):
         if pRegler < 3.2:
             pRegler = 3.2
     else:
-        pRegler = 2
+        #static PID values due to currently noisy data. Working on a fix
+        pRegler = 2 
         iRegler = 0
         dRegler = 10
 
@@ -689,8 +675,6 @@ def pidCalculationLight(speed):
     #set hard bottom for d value, as otherwise the values don't work
     if dReglerLight < 5:
         dReglerLight = 5
-
-
 
 """
 This is an introduction on how to use the driving programs. For accurate driving you will need to adjust the PID values to fit your
