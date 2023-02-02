@@ -1,12 +1,28 @@
 # LEGO type:standard slot:1 autostart
 
-from spike import PrimeHub, Motor, MotorPair, ColorSensor, DistanceSensor, App
-from spike.control import wait_for_seconds, wait_until, Timer
-from hub import battery
-from util import log
-
 import math
+from spike import PrimeHub, Motor, MotorPair, ColorSensor
+from spike.control import wait_for_seconds, Timer
+from hub import battery
+hub = PrimeHub()
+
+
+import hub as hub2
+
 import sys
+
+#Preperation for parallel code execution
+accelerate = True
+run_generator = True
+runSmall = True
+
+lastAngle = 0
+oldAngle = 0
+
+gyroValue = 0
+
+# Create your objects here.
+hub = PrimeHub()
 
 #PID value Definition
 pRegler = 0.0
@@ -17,22 +33,6 @@ pReglerLight = 0.0
 iReglerLight = 0.0
 dReglerLight = 0.0
 
-#Preperation for parallel code execution
-accelerate = True
-run_generator = True
-runSmall = True
-
-# Create your objects here.
-hub = PrimeHub()
-
-#initialize the motors
-leftMotor = Motor('B') #adjust the motor ports until they match your configuration, we recommend assigning your ports to the ones in the program for ease of use
-rightMotor = Motor('C')
-smallMotorA = Motor('A')
-smallMotorD = Motor('D')
-leftMotor.set_degrees_counted(0)
-rightMotor.set_degrees_counted(0)
-
 """
 Initialize color Sensors
 left sensor: port F
@@ -40,611 +40,786 @@ right sensor: port E
 """
 colorE = ColorSensor('E') #adjust the sensor ports until they match your configuration, we recommend assigning your ports to the ones in the program for ease of use
 colorF = ColorSensor('F')
+smallMotorA = Motor('A')
+smallMotorD = Motor('D')
 
 #Set variables based on robot
 circumference = 17.6 #circumference of the wheel powered by the robot in cm
-sensordistance = 6.4 #distance between the two light sensors in cm. Used in Tangent alignment
+sensordistance = 7 #distance between the two light sensors in cm. Used in Tangent alignment 6.4 in studs
 
 
-"""
-Set movement motors
-left motor: port B
-right motor: port C
-"""
-movement_motors = MotorPair('C', 'B') #adjust the ports until they match your configuration, we recommend assigning your ports to the ones in the program for ease of use
 
 cancel = False
+inMain = True
 
+class DriveBase:
 
-def lineFollower(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart, side , sensorPort, driveToLinePort = 0, lightValue = 0, detectLineStart = 0,):
-    """
-        This is the function used to let the robot follow a line until either the entered distance has been achieved or the other sensor of the robot senses a line.
-        Like all functions that drive the robot this function has linear acceleration and breaking. It also uses PID values that are automatically set depending on the
-        current speed of the robot (See function PIDCalculationLight)
+    def __init__(self, hub, leftMotor, rightMotor):
+        self.hub = hub
+        self.leftMotor = Motor(leftMotor)
+        self.rightMotor = Motor(rightMotor)
+        self.movement_motors = MotorPair(leftMotor, rightMotor) 
 
-        Parameters
-        -------------
+    def lineFollower(self, distance, startspeed, maxspeed, endspeed, sensorPort, side, addspeed = 0.2, brakeStart = 0.7 , stopMethod=None, generator = None, stop = True):
+        """
+            This is the function used to let the robot follow a line until either the entered distance has been achieved or the other sensor of the robot senses a line.
+            Like all functions that drive the robot this function has linear acceleration and breaking. It also uses PID values that are automatically set depending on the
+            current speed of the robot (See function PIDCalculationLight)
+            Parameters
+            -------------
+            distance: The value tells the program the distance the robot has to drive. Type: Integer. Default: No default value
+            speed: The speed which the robot is supposed to start at. Type: Integer. Default: No default value
+            maxspeed: The highest speed at which the robot drives. Type: Integer. Default: No default value
+            endspeed: The speed which the robot achieves at the end of the function. Type: Integer. Default: No default value
+            addspeed: The percentage after which the robot reaches its maxspeed. Type: Float. Default: No default value
+            brakeStart: The value which we use to tell the robot after what percentage of the distance we need to slow down. Type: Float. Default: No default value
+            stopMethod: the Stopmethod the robot uses to stop. If no stopMethod is passed stopDistance is used instead. Default: stopDistance
+            generator:  the generator that runs something parallel while driving. Default: No default value
+            stop: the boolean that determines whether the robot should stop the motors after driving or not. Default: True
+        """
+        
+        if cancel:
+            return
 
-        distance: The value tells the program the distance the robot has to drive. Type: Integer. Default: No default value
+        global run_generator, runSmall
 
-        speed: The speed which the robot is supposed to start at. Type: Integer. Default: No default value
+        if generator == None:
+            run_generator = False
 
-        maxspeed: The highest speed at which the robot drives. Type: Integer. Default: No default value
+        #set the speed the robot starts at
+        speed = startspeed
+        #reset PID values to eliminate bugs
+        change = 0
+        old_change = 0
+        integral = 0
+        #reset the driven distance of the robot to eliminate bugs
 
-        endspeed: The speed which the robot achieves at the end of the function. Type: Integer. Default: No default value
+        #specifies the color sensor
+        colorsensor = ColorSensor(sensorPort)
+        #Get degrees of motors turned before robot has moved, allows for distance calculation without resetting motors
+        loop = True
+        #Going backwards is not supported on our robot due to the motors then being in front of the colour sensors and the program not working
+        if distance < 0:
+            print('ERR: distance < 0')
+            distance = abs(distance)
+        #Calculate target values for the motors to turn to
+        finalDistance = (distance / 17.6) * 360
+        #Calculate after what distance the robot has to reach max speed
+        accelerateDistance = finalDistance * addspeed
+        deccelerateDistance = finalDistance * (1 - brakeStart)
 
-        addspeed: The percentage after which the robot reaches its maxspeed. Type: Float. Default: No default value
-
-        brakeStart: The value which we use to tell the robot after what percentage of the distance we need to slow down. Type: Float. Default: No default value
-
-        side: Wich side of the line the robot should use. Type: String Accpeted inputs: "left" "right"
-
-        sensorPort: This value tells the program which ColorSensor the robot should use to follow the line. Type: String. Accepted inputs: "E", "F"
-
-        driveToLinePort: Tells the program if it should stop if it sees a light value on the specified sensor. Type: String. Accpeted inputs: "E", "F"
-
-        lightvalue: Tells the program what lightvalue needs to be reached on the driveToLinePort as an EndCondition. Type: Integer
-
-        detectLineStart: The value which we use to tell the robot after what percentage of the distance we need to look for the line to drive to. Type: Float. Default: 0
-    """
-    #start of break function implementation, used to cancel current program without terminating main
-    if cancel:
-        return
-    #set the speed the robot starts at
-    speed = startspeed
-    #reset PID values to eliminate bugs
-    change = 0
-    old_change = 0
-    integral = 0
-    #reset the driven distance of the robot to eliminate bugs
-    drivenDistance = 0
-    #specifies the color sensor
-    colorsensor = ColorSensor(sensorPort)
-    #Get degrees of motors turned before robot has moved, allows for distance calculation without resetting motors
-    loop = True
-    b_Startvalue = - leftMotor.get_degrees_counted()
-    c_Startvalue = rightMotor.get_degrees_counted()
-    #Going backwards is not supported on our robot due to the motors then being in front of the colour sensors and the program not working
-    if distance < 0:
-        print('ERR: distance < 0')
-        distance = abs(distance)
-    #Calculate target values for the motors to turn to
-    rotateDistance = (distance / circumference) * 360
-    #Calculate after what distance the robot has to reach max speed
-    accelerateDistance = rotateDistance * addspeed
-
-    invert = 1
-
-    #Calculation of steering factor, depending on which side of the line we are on
-    if side == "left":
-        invert = -1
-    elif side == "right":
         invert = 1
-    else:
-        print("you need to specify the side of the line with left or right")
-        hub.speaker.beep(100,1.5)
-        return
 
-    #Speed debugging
-    if speed < 0:
-        print("Driving backwards is currently not supported")
-        hub.speaker.beep(100,1.5)
+        #Calculation of steering factor, depending on which side of the line we are on
+        if side == "left":
+            invert = 1
+        elif side == "right":
+            invert = -1
+        
+        #Calculation of the start of the robot slowing down
+        
+        self.left_Startvalue = self.leftMotor.get_degrees_counted()
+        self.right_Startvalue = self.rightMotor.get_degrees_counted()
+        drivenDistance = getDrivenDistance(self)
 
-        return
-    #Calculation of the start of the robot slowing down
-    brakeStartValue = brakeStart * rotateDistance
-    detectLineStartValue = detectLineStart * rotateDistance
+        brakeStartValue = brakeStart * finalDistance
+        while loop:
+            if cancel:
+                print("cancel")
+                break
+        
+            if run_generator: #run parallel code execution
+                next(generator)
 
-    while loop:
-        #Checks the driven distance as an average of both motors for increased accuracy
-        oldDrivenDistance = drivenDistance
-        drivenDistance = abs(((- leftMotor.get_degrees_counted() - b_Startvalue) + (rightMotor.get_degrees_counted() - c_Startvalue)) / 2)
+            #Checks the driven distance as an average of both motors for increased accuracy
+            oldDrivenDistance = drivenDistance
+            drivenDistance = getDrivenDistance(self)
+            #Calculates target value for Robot as the edge of black and white lines
+            old_change = change
 
-        #Calculates target value for Robot as the edge of black and white lines
-        old_change = change
-
-        change = colorsensor.get_reflected_light() - 50
-
-        #Steering factor calculation using PID, sets new I value
-
-        steering = (((change * pReglerLight) + (integral * iReglerLight) + (dReglerLight * (change - old_change)))) * invert
-        integral = change + integral
-        #Calculation of current speed for robot, used for acceleratiion, braking etc.
-        speed = speedCalculation(speed, startspeed, maxspeed, endspeed, accelerateDistance, brakeStartValue, drivenDistance, oldDrivenDistance,)
-
-        pidCalculationLight(speed)
-        #PID value updates
-        steering = max(-100, min(steering, 100))
-
-        #Driving using speed values calculated with PID and acceleration for steering, use of distance check
-        if speed > 0:
-            movement_motors.start_at_power(- int(speed), int(steering))
-            if rotateDistance < drivenDistance:
-                loop = False
-        else:
-            movement_motors.start_at_power(- int(speed),-int(steering))
-            if rotateDistance > drivenDistance:
-                loop = False
-
-        #Checking for line on specified sensor as end condition
+            change = colorsensor.get_reflected_light() - 50
 
 
+            #Steering factor calculation using PID, sets new I value
 
-        if detectLineStartValue <= drivenDistance:
-            if driveToLinePort != 0:
-                colorSensor = ColorSensor(driveToLinePort)
-                if colorSensor.get_reflected_light() < lightValue:
+        
+            steering = (((change * pReglerLight) + (integral * iReglerLight) + (dReglerLight * (change - old_change)))) * invert
+            integral = change + integral
+            #Calculation of current speed for robot, used for acceleratiion, braking etc.
+            speed = speedCalculation(speed, startspeed, maxspeed, endspeed, accelerateDistance, deccelerateDistance, brakeStartValue, drivenDistance, oldDrivenDistance)
+
+            pidCalculationLight(speed)
+            #PID value updates
+            steering = max(-100, min(steering, 100))
+
+            #Driving using speed values calculated with PID and acceleration for steering, use of distance check
+            self.movement_motors.start_at_power(int(speed), int(steering))
+
+            if stopMethod != None:
+                if stopMethod.loop():
                     loop = False
+            else:   
+                if finalDistance < drivenDistance:
+                    break
 
-    movement_motors.stop()
-    return
-
-def gyroRotation(angle, startspeed, maxspeed, endspeed, addspeed, brakeStart, lightSensorPort = 0, lightValue = 0, variant = 0, detectLineStart = 0):
-    """
-
-        This is the function that we use to make the robot turn the length of a specific angle or for the robot to turn until it senses a line. Even in this function the robot
-        can accelerate and slow down. It also has Gyrosensor calibrations based on our experimental experience.
-
-        Parameters
-        -------------
-        angle: The angle which the robot is supposed to turn. Type: Integer. Default value: No default value
-
-        speed: The speed which the robot is supposed to start at. Type: Integer. Default: No default value
-
-        maxspeed: The highest speed at which the robot drives. Type: Integer. Default: No default value
-
-        endspeed: The speed which the robot achieves at the end of the function. Type: Integer. Default: No default value
-
-        addspeed: The percentage after which the robot reaches the maxspeed. Type: Float. Default: No default value
-
-        brakeStart: The percentage after which the robot starts slowing down until it reaches endspeed. Type: Float. Default: No default value
-
-        lightSensorPort: The port the robot monitors for turning until it sees a colour there. Type: String. Default: 0
-
-        lightValue: The value the robot has to see on lightSensorPort to stop. Type: Integer. Default: 0
-
-        variant: Different turning types. 0: Both motors turn, robot turns on the spot. 1: Only the outer motor turns, resulting in a corner. Type: Integer. Default: 0
-
-        detectLineStart: the point at which the robot starts looking for a line to stop at, in percent. Type: Float. Default: 0
-    """
-
-    if cancel:
+        if stop:
+            self.movement_motors.stop()
+            
+        run_generator = True
+        runSmall = True
+        generator = 0
         return
 
+    def gyroRotation(self, angle, startspeed, maxspeed, endspeed, addspeed = 0.3, brakeStart = 0.7, rotate_mode = 0, stopMethod = None, generator = None, stop = True):
+        """
+            This is the function that we use to make the robot turn the length of a specific angle or for the robot to turn until it senses a line. Even in this function the robot
+            can accelerate and slow down. It also has Gyrosensor calibrations based on our experimental experience.
+            Parameters
+            -------------
+            angle: The angle which the robot is supposed to turn. Use negative numbers to turn counterclockwise. Type: Integer. Default value: No default value
+            startspeed: The speed which the robot is supposed to start at. Type: Integer. Default: No default value
+            maxspeed: The highest speed at which the robot drives. Type: Integer. Default: No default value
+            endspeed: The speed which the robot achieves at the end of the function. Type: Integer. Default: No default value
+            addspeed: The percentage after which the robot reaches the maxspeed. Type: Float. Default: No default value
+            brakeStart: The percentage after which the robot starts slowing down until it reaches endspeed. Type: Float. Default: No default value
+            rotate_mode: Different turning types. 0: Both motors turn, robot turns on the spot. 1: Only the outer motor turns, resulting in a corner. Type: Integer. Default: 0
+            stopMethod: the Stopmethod the robot uses to stop. If no stopMethod is passed stopDistance is used instead. Default: stopDistance
+            generator:  the generator that runs something parallel while driving. Default: No default value
+            stop: the boolean that determines whether the robot should stop the motors after driving or not. Default: True
+        """
 
-    speedMultiplier = 0.125
+        if cancel:
+            return
 
-    if variant == 0:
-        startspeed = abs(startspeed)
-        maxspeed = abs(maxspeed)
-        endspeed = abs(endspeed)
-        speedMultiplier = 0.25
+        global run_generator, runSmall
 
-    speed = startspeed
+        if generator == None:
+            run_generator = False
 
-    #set standard variables
-    finalGyroValue = 0
-    rotatedDistance = 0
-    brakeStartValue = 0
-    steering = 100
-    hub.motion_sensor.reset_yaw_angle() #Yaw angle used due to orientation of our hub. This might need to be changed
+        if rotate_mode == 0:
+            startspeed = abs(startspeed)
+            maxspeed = abs(maxspeed)
+            endspeed = abs(endspeed)
 
-    accelerateDistance = abs(angle * addspeed)
-    deccelerateDistance = abs(angle *(1 - brakeStart))
+        speed = startspeed
 
-    #gyro sensor calibration
-    angle = angle * (336/360) #336/360 is experimental value based on turning the robot for 10 rotations
+        #set standard variables
+        rotatedDistance = 0
+        steering = 1
 
-    #Setting variables based on inputs
-    loop = True
-    gyroStartValue = hub.motion_sensor.get_yaw_angle() #Yaw angle used due to orientation of the hub. This might need to be changed
-    finalGyroValue = gyroStartValue + angle
-    brakeStartValue = angle * brakeStart + gyroStartValue
+        accelerateDistance = abs(angle * addspeed) 
+        deccelerateDistance = abs(angle * (1 - brakeStart))
 
-    #Inversion of steering value for turning counter clockwise
-    if angle < 0:
-        steering = steering * -1
+        #gyro sensor calibration
+        angle = angle * (2400/2443) #experimental value based on 20 rotations of the robot
 
-    #Testing to see if turining is necessary, turns until loop = False
+        #Setting variables based on inputs
+        loop = True
+        gyroStartValue = getGyroValue() #Yaw angle used due to orientation of the self.hub. This might need to be changed
+        brakeStartValue = (angle + gyroStartValue) * brakeStart
 
-    detectLineStartValue = detectLineStart * angle
+        #Inversion of steering value for turning counter clockwise
+        if angle < 0:
+            steering = -1
 
-    while loop:
-        rotatedDistance = hub.motion_sensor.get_yaw_angle() #Yaw angle used due to orientation of the hub. This might need to be changed
+        #Testing to see if turining is necessary, turns until loop = False
 
+        while loop:
+            if cancel:
+                break
 
-        #Calculation of speed values for positive speeds
-        addspeedPerDegree = speedMultiplier * (maxspeed - startspeed) / accelerateDistance
+            if run_generator: #run parallel code execution
+                next(generator)
 
-        subSpeedPerDegree = speedMultiplier * (maxspeed - endspeed) / deccelerateDistance
+            oldRotatedDistance = rotatedDistance
+            rotatedDistance = getGyroValue() #Yaw angle used due to orientation of the self.hub. This might need to be changed
 
-        if speed > 0:
-            if angle > 0:
-                #Calculation and detection of brake speed
-                if rotatedDistance > brakeStartValue and speed > endspeed:
-                    speed = speed - subSpeedPerDegree
+            #Checking for variants
+            #Both Motors turn, robot moves on the spot
+            if rotate_mode == 0:
+                self.movement_motors.start_tank_at_power(int(speed) * steering, -int(speed) * steering)
+            #Only outer motor turns, robot has a wide turning radius
+            
+            elif rotate_mode == 1:
 
-                #Acceleration during acceleration phase
-                elif speed < maxspeed:
-                    speed = speed + addspeedPerDegree
-
-        #Calculation of speed values for positive speeds
-            else:
-                #Calculation and detection of brake speed
-                if rotatedDistance < brakeStartValue and speed > endspeed:
-                    speed = speed - subSpeedPerDegree
-                #Acceleration during acceleration phase
-                elif speed < maxspeed:
-                    speed = speed + addspeedPerDegree
-            #Calculation of speed values for positive speeds
-
-        else:
-            if angle > 0:
-            #Calculation and detection of brake speedy
-                if rotatedDistance > brakeStartValue and speed < endspeed:
-                    speed = speed - subSpeedPerDegree
-            #Acceleration during acceleration phase
-                elif speed > maxspeed:
-                    speed = speed + addspeedPerDegree
-            else:
-
-            #Calculation and detection of brake speed
-                if rotatedDistance < brakeStartValue and speed < endspeed:
-                    speed = speed - subSpeedPerDegree
-            #Acceleration during acceleration phase
-
-                elif speed > maxspeed:
-                    speed = speed + addspeedPerDegree
-
-
-        if angle > 0:
-            #Ends rotation because robot has reached the desired angle while turning clockwise
-            if finalGyroValue < rotatedDistance:
-                loop = False
-
-        else:
-            #Ends rotation baecuase robot has reached the desired angle while turning counterclockwise
-            if finalGyroValue > rotatedDistance:
-                loop = False
-
-
-        #Checking for variants
-        #Both Motors turn, robot moves on the spot
-        if variant == 0:
-            movement_motors.start_at_power(int(speed), steering)
-        #Only outer motor turns, robot has a wide turning radius
-        elif variant == 1:
-            if angle > 0:
-                if speed > 0:
-                    leftMotor.start_at_power(- int(speed))
+                if angle * speed > 0:
+                    self.leftMotor.start_at_power(- int(speed))
                 else:
-                    rightMotor.start_at_power(+ int(speed))
-            else:
-                if speed > 0:
-                    rightMotor.start_at_power( int(speed))
-                else:
-                    leftMotor.start_at_power(- int(speed))
+                    self.rightMotor.start_at_power(+ int(speed))
 
-        #Sets Colour sensor checking for line
-        if abs(detectLineStartValue) < abs(rotatedDistance):
-            if lightSensorPort != 0:
-                colorSensor = ColorSensor(lightSensorPort)
-
-                #Stops robot if colour sensor detects desired colour
-                if colorSensor.get_reflected_light() < lightValue:
+            if stopMethod != None:
+                if stopMethod.loop():
                     loop = False
-    #Stops movement motors for increased accuracy while stopping
-    movement_motors.stop()
-    return # End of gyroStraightDrive
+                    break
+            elif abs(angle) <= abs(rotatedDistance - gyroStartValue):                   
+                    loop = False
+                    break
 
-def gyroStraightDrive(distance, startspeed, maxspeed, endspeed, addspeed, brakeStart, port = 0, lightValue = 0, variant = 0, detectLineStart = 0, offset = 0, generator = 0):
-    """
-        This is the function that we use to make the robot go forwards or backwards without drifting. It can accelerate, it can slow down and there's also PID. You can set the values
-        in a way where you can either drive until the entered distance has been achieved or until the robot senses a line.
 
-        Parameters
-        -------------
-        distance: the distance that the robot is supposed to drive. Type: Integer. Default: No default value
 
-        speed: The speed which the robot is supposed to start at. Type: Integer. Default: No default value
+        #Stops movement motors for increased accuracy while stopping
+        if stop:
+            self.movement_motors.stop()
 
-        maxspeed: The highest speed at which the robot drives. Type: Integer. Default: No default value
+        run_generator = True
+        runSmall = True
 
-        endspeed: The speed which the robot achieves at the end of the function. Type: Integer. Default: No default value
+        return # End of gyroStraightDrive
 
-        addspeed: The speed which the robot adds in order to accelerate. Type: Float. Default: No default value
+    def gyroStraightDrive(self, distance, startspeed, maxspeed, endspeed, addspeed = 0.3, brakeStart = 0.7, stopMethod=None, offset = 0, generator = None, stop = True):
+        """
+            This is the function that we use to make the robot go forwards or backwards without drifting. It can accelerate, it can slow down and there's also PID. You can set the values
+            in a way where you can either drive until the entered distance has been achieved or until the robot senses a line.
+            Parameters
+            -------------
+            distance: the distance that the robot is supposed to drive. Type: Integer. Default: No default value
+            speed: The speed which the robot is supposed to start at. Type: Integer. Default: No default value
+            maxspeed: The highest speed at which the robot drives. Type: Integer. Default: No default value
+            endspeed: The speed which the robot achieves at the end of the function. Type: Integer. Default: No default value
+            addspeed: The speed which the robot adds in order to accelerate. Type: Float. Default: 0.2
+            brakeStart: The value which we use to tell the robot after what percentage of the distance we need to slow down. Type: Float. Default: 0.8
+            port: This value tells the program whether the robot is supposed to check for a black line with the specified light snsor. Type: String. Default: 0
+            lightValue: This value tells the program the value the robot should stop at if port sees it. Type: Integer. Default: 0
+            align_variant: Tells the robot to align itself to a line if it sees one. 0: No alignment. 1: standard alignment. 2: tangent based alignment Type: Integer. Default: 0
+            detectLineStart: The value which we use to tell the robot after what percentage of the distance we need to look for the line to drive to. Type: Float. Default: 0
+            offset: The value sends the robot in a direction which is indicated by the value entered. Type: Integer. Default: 0
+            generator: Function executed while robot is executing gyroStraightDrive. Write the wanted function and its parameters here. Type: . Default: 0
+            stopMethod: the Stopmethod the robot uses to stop. If no stopMethod is passed stopDistance is used instead. Default: stopDistance
+            generator:  the generator that runs something parallel while driving. Default: No default value
+            stop: the boolean that determines whether the robot should stop the motors after driving or not. Default: True
+        """
 
-        brakeStart: The value which we use to tell the robot after what percentage of the distance we need to slow down. Type: Float. Default: No default value
+        if cancel:
+            return
 
-        port: This value tells the program whether the robot is supposed to check for a black line with the specified light snsor. Type: String. Default: 0
+        global run_generator, runSmall
+        global pRegler, iRegler, dRegler
+        
+        if generator == None:
+            run_generator = False
 
-        lightValue: This value tells the program the value the robot should stop at if port sees it. Type: Integer. Default: 0
+        #Set starting speed of robot
+        speed = startspeed
+        #Sets PID values
 
-        variant: Tells the robot to align itself to a line if it sees one. 0: No alignment. 1: alignment using just light sensors 2: alignment using tangent alignment. Type: Integer. Default: 0
+        change = 0
+        old_change = 0
+        integral = 0
+        steeringSum = 0
 
-        detectLineStart: The value which we use to tell the robot after what percentage of the distance we need to look for the line to drive to. Type: Float. Default: 0
-
-        offset: The value sends the robot in a direction which is indicated by the value entered. Type: Integer. Default: 0
-
-        generator: Function executed while robot is executing gyroStraightDrive. Write the wanted function and its parameters here. Type: . Default: 0
-    """
-
-    #Debugging of speed values so that robot always reaches end. Based on experimental values for our robot
-    if (startspeed < 17 and startspeed > 0):
-        print("startspeed should never be less than 17")
-        startspeed = 17
-    if(startspeed > -17 and startspeed < 0):
-        print("startspeed should never be less than 17")
-        startspeed = -17
-    if (endspeed < 17 and endspeed > 0):
-        print("startspeed should never be less than 17")
-        #endspeed = 17
-    if(endspeed > -17 and endspeed < 0):
-        print("startspeed should never be less than 17")
-        #endspeed = -17
-
-    if cancel:
-        return
-    #Preperation for parallel code execution
-    global run_generator
-    global runSmall
-
-    if generator == 0:
-        run_generator = False
-    #Set starting speed of robot
-    speed = startspeed
-
-    #Sets PID values
-    change = 0
-    old_change = 0
-    integral = 0
-    drivenDistance = 0
-
-    #Sets values based on user inputs
-    loop = True
-    b_Startvalue = - leftMotor.get_degrees_counted()
-    c_Startvalue = rightMotor.get_degrees_counted()
-    hub.motion_sensor.reset_yaw_angle() #Yaw angle used due to orientation of the hub. This might need to be changed
-
-    #Error check for distance
-    if distance < 0:
-        print('ERR: distance < 0')
-        distance = abs(distance)
-
-    #Calulation of degrees the motors should turn to
-    rotateDistance = (distance / circumference) * 360
-    accelerateDistance = rotateDistance * addspeed
-    invert = 1
-
-    #Inversion of target rotation value for negative values
-    if speed < 0:
-        rotateDistance = rotateDistance * -1
         invert = -1
 
-    #Calculation of braking point
-    brakeStartValue = brakeStart * rotateDistance
-    detectLineStartValue = detectLineStart * rotateDistance
-    detectedLineDistance = 0
-    detectedPort = ''
-    #Robot drives while loop = true
+        #Sets values based on user inputs
+        loop = True
 
-    while loop:
 
-        if run_generator: #run parallel code execution
-            next(generator)
+        gyroStartValue = getGyroValue()
 
-        if breakFunction() or not loop:
-            break
+        #Error check for distance
+        if distance < 0:
+            print('ERR: distance < 0')
+            distance = abs(distance)
 
-        #Calculation of driven distance and PID values
-        oldDrivenDistance = drivenDistance
-        drivenDistance = ((- leftMotor.get_degrees_counted() - b_Startvalue) + (rightMotor.get_degrees_counted() - c_Startvalue)) / 2 #using average value between motors for increased accuracy
+        #Calulation of degrees the motors should turn to
+        #17.6 is wheel circumference in cm. You might need to adapt it
+        rotateDistance = (distance / 17.6) * 360
+        accelerateDistance = rotateDistance * addspeed
+        deccelerateDistance = rotateDistance * (1 - brakeStart)
 
-        change = hub.motion_sensor.get_yaw_angle() #yaw angle used due to orientation of the hub
-        steering = ((change * pRegler) + (integral * iRegler) + (dRegler * (change - old_change))) + offset
-        steering = max(-100, min(steering, 100))
+        #Inversion of target rotation value for negative values
+        if speed < 0:
+            invert = 1
 
-        integral = change + integral
-        old_change = change
+        #Calculation of braking point
+        self.left_Startvalue = self.leftMotor.get_degrees_counted()
+        self.right_Startvalue = self.rightMotor.get_degrees_counted()
+        brakeStartValue = brakeStart * rotateDistance
+        drivenDistance = getDrivenDistance(self)
 
-        #Calculation of speed based on acceleration and braking, calculation of steering value for robot to drive perfectly straight
-        speed = speedCalculation(speed, startspeed,maxspeed, endspeed, accelerateDistance, brakeStartValue, drivenDistance, oldDrivenDistance)
-        pidCalculation(speed)
-
-        #Alignment based on variant
-        if variant == 1:
-            #Colour sensor E sees light first and triggers
-            if colorE.get_reflected_light() < lightValue:
-                movement_motors.stop()
-                #Turning robot so that other colour sensor is over line
-                while True:
-
-                    leftMotor.start_at_power(-int(speed))
-
-                    #Line detection and stopping
-                    if colorF.get_reflected_light() < lightValue or breakFunction():
-                        leftMotor.stop()
-                        loop = False
-                        break
+        while loop:
+            if cancel:
                 break
-            #Colour sensor F sees line first
-            elif colorF.get_reflected_light() < lightValue:
+            if run_generator: #run parallel code execution
+                next(generator)
 
-                leftMotor.stop()
+            #Calculation of driven distance and PID values
+            oldDrivenDistance = drivenDistance
+            drivenDistance = getDrivenDistance(self)
+
+            pidCalculation(speed)
+            change = getGyroValue() - gyroStartValue #yaw angle used due to orientation of the self.hub
+
+
+            currenSteering = (change * pRegler + integral * iRegler + dRegler * (change - old_change)) + offset + steeringSum*0.02
+
+            currenSteering = max(-100, min(currenSteering, 100))
+            #print("steering: " + str(currenSteering) + " gyro: " + str(change) + " integral: " + str(integral))
+
+            steeringSum += change
+            integral += change - old_change
+            old_change = change
+
+            #Calculation of speed based on acceleration and braking, calculation of steering value for robot to drive perfectly straight
+            speed = speedCalculation(speed, startspeed,maxspeed, endspeed, accelerateDistance, deccelerateDistance, brakeStartValue, drivenDistance, oldDrivenDistance)
+            self.movement_motors.start_at_power(int(speed), invert * int(currenSteering))
+
+
+            if stopMethod != None:
+                if stopMethod.loop():
+                    loop = False
+            elif rotateDistance < drivenDistance:                   
+                    loop = False
+
+
+        if stop:
+            self.movement_motors.stop()
+    
+        run_generator = True
+        runSmall = True
+
+        return #End of gyroStraightDrive
+
+    def arcRotation(self, radius, angle, startspeed, maxspeed, endspeed, addspeed = 0.3, brakeStart = 0.7, stopMethod=None, generator = None, stop = True):  
+        """
+            This is the function that we use to make the robot drive a curve with a specified radius and to a given angle
+            Parameters
+            -------------
+            radius: the radius of the curve the robot is supposed to drive; measured from the outside edge of the casing. Type: Integer. Default: 0
+            angle: the angle that the robot is supposed to rotate on the curve. Type: Integer. Default: 0
+            speed: The speed which the robot is supposed to start at. Type: Integer. Default: No default value
+            maxspeed: The highest speed at which the robot drives. Type: Integer. Default: No default value
+            endspeed: The speed which the robot achieves at the end of the function. Type: Integer. Default: No default value
+            addspeed: The speed which the robot adds in order to accelerate. Type: Float. Default: 0.2
+            brakeStart: The value which we use to tell the robot after what percentage of the distance we need to slow down. Type: Float. Default: 0.8
+            stopMethod: the Stopmethod the robot uses to stop. If no stopMethod is passed stopDistance is used instead. Default: stopDistance
+            generator:  the generator that runs something parallel while driving. Default: No default value
+            stop: the boolean that determines whether the robot should stop the motors after driving or not. Default: True
+        """
+
+        if cancel:
+            print("cancel")
+            return
+
+        global run_generator, runSmall
+
+        if generator == None:
+            run_generator = False
+
+        angle = angle * (336/360) #gyro calibration
+        
+        gyroStartValue = getGyroValue()
+        finalGyroValue = gyroStartValue + angle
+        currentAngle = gyroStartValue
+
+        accelerateDistance = abs(angle * addspeed)
+        deccelerateDistance = abs(angle * (1 - brakeStart))
+        brakeStartValue = abs(angle * brakeStart)
+
+        loop = True
+
+        #Calculating the speed ratios based on the given radius
+        if angle * startspeed > 0:
+            speed_ratio_left = (radius+14) / (radius+2) #calculate speed ratios for motors. These will need to be adapted based on your robot design
+            speed_ratio_right = 1
+        else:
+            speed_ratio_left = 1
+            speed_ratio_right = (radius+14) / (radius+2)
+        
+        #Calculating the first speed to drive with
+        left_speed = speedCalculation(startspeed, startspeed, maxspeed, endspeed, accelerateDistance, deccelerateDistance, brakeStartValue, 1, 0)
+        right_speed = speedCalculation(startspeed, startspeed , maxspeed , endspeed , accelerateDistance, deccelerateDistance, brakeStartValue, 1, 0)
+        while loop:
+            #when the cancel button is pressed stop the gyrostraight drive directly
+            if cancel:
+                break
+
+            if run_generator: #run parallel code execution
+                next(generator)
+
+            currentAngle = getGyroValue() #Yaw angle used due to orientation of the self.hub. This might need to be changed
+        
+            #Calculating the current speed the robot should drive
+            left_speed = speedCalculation(left_speed, startspeed, maxspeed, endspeed, accelerateDistance, deccelerateDistance, brakeStartValue, 1, 0)
+            right_speed = speedCalculation(right_speed, startspeed , maxspeed , endspeed , accelerateDistance, deccelerateDistance, brakeStartValue, 1, 0)
+
+
+            self.movement_motors.start_tank_at_power(int(left_speed* speed_ratio_left), int(right_speed* speed_ratio_right))
+        
+            #if there is a stopMethod passed use it and stop the loop if it returns true otherwise check if the robot has rotated to the given angle
+            if stopMethod != None:
+                #print("stoMeth")
+                if stopMethod.loop():
+                    loop = False
+                    break
+
+            (angle / abs(angle))
+            if finalGyroValue * (angle / abs(angle)) < currentAngle * (angle / abs(angle)):
+                #print("finalGyroValue: " + str(finalGyroValue) + " rotatedDistance: " + str(currentAngle))                  
+                loop = False
+                break
+
+
+            
+
+        #if stop is true then stop the motors otherwise don't stop the motor
+        if stop:
+            self.movement_motors.stop()
+
+        run_generator = True
+        runSmall = True
+        return #End of arcRotation
+
+def resetGyroValue():
+    global gyroValue
+    hub2.motion.yaw_pitch_roll(0)
+
+    gyroValue = 0
+
+def getGyroValue():
+
+    #this method is used to return the absolute gyro Angle and the angle returned by this method doesn't reset at 180 degree
+    global lastAngle
+    global oldAngle
+    global gyroValue
+
+    #gets the angle returned by the spike prime program. The problem is the default get_yaw_angle resets at 180 and -179 back to 0
+    angle = hub.motion_sensor.get_yaw_angle()
+
+    if angle != lastAngle:
+        oldAngle = lastAngle
+        
+    lastAngle = angle
+
+    if angle == 179 and oldAngle == 178:
+        hub2.motion.yaw_pitch_roll(0)#reset
+        gyroValue += 179
+        angle = 0
+    
+    if angle == -180 and oldAngle == -179:
+        hub2.motion.yaw_pitch_roll(0) #reset
+        gyroValue -= 180   
+        angle = 0
+
+    return gyroValue + angle
+
+def getDrivenDistance(data):
+
+
+    #print(str(abs(data.leftMotor.get_degrees_counted() - data.left_Startvalue)) + " .:. " + str(abs(data.rightMotor.get_degrees_counted() - data.right_Startvalue)))
+
+    drivenDistance = (
+                    abs(data.leftMotor.get_degrees_counted() - data.left_Startvalue) + 
+                    abs(data.rightMotor.get_degrees_counted() - data.right_Startvalue)) / 2
+
+    return drivenDistance
+
+def defaultClass(object, db):
+    object.db = db
+    object.leftMotor = db.leftMotor
+    object.rightMotor = db.rightMotor
+
+    object.left_Startvalue = abs(db.leftMotor.get_degrees_counted())
+    object.right_Startvalue = abs(db.rightMotor.get_degrees_counted())
+    return object
+
+class stopMethods(): #This class has all our stopmethods for easier coding and less redundancy
+    
+    class stopLine():
+        """
+            Drive until a Line is detected
+            Parameters
+            -------------
+            db: the drivebase of the robot
+            port: Port to detect line on
+            lightvalue: Value of the light to detect
+            detectLineDistance: Distance until start detecting a line
+            """
+        def __init__(self, db, port, lightvalue, detectLineDistance):
+            self = defaultClass(self, db)            
+
+            self.port = port
+            self.detectLineDistance = (detectLineDistance / 17.6) * 360
+
+            #if lightvalue bigger 50 stop when lightvalue is higher
+            self.lightvalue = lightvalue
+
+
+        def loop(self):
+
+
+            drivenDistance = getDrivenDistance(self)
+
+            if abs(self.detectLineDistance) < abs(drivenDistance):
+                if self.lightvalue > 50:
+                    if ColorSensor(self.port).get_reflected_light() > self.lightvalue:
+                        return True
+                else:
+                    if ColorSensor(self.port).get_reflected_light() < self.lightvalue:
+                        return True
+
+            return False
+    
+    class stopAlign():
+        """
+            Drive until a Line is detected
+            Parameters
+            -------------
+            db: the drivebase of the robot
+            port: Port to detect line on
+            lightvalue: Value of the light to detect
+            speed: speed at which the robot searches for other line
+            """
+        def __init__(self, db, lightvalue, speed):
+            self = defaultClass(self, db)    
+            self.speed = speed
+
+
+            #if lightvalue bigger 50 stop when lightvalue is higher
+            self.lightValue = lightvalue
+
+
+        def loop(self):
+
+            if colorE.get_reflected_light() < self.lightValue:
+                self.rightMotor.stop()
                 #Turning robot so that other colour sensor is over line
                 while True:
-                    rightMotor.start_at_power(int(speed))
+
+                    self.leftMotor.start_at_power(-int(self.speed))
 
                     #Line detection and stopping
-                    if colorE.get_reflected_light() < lightValue or breakFunction():
-                        rightMotor.stop()
-                        loop = False
-                        break
-
-        elif variant == 2:
-            #tangent based line detection
-
-            #Colour sensor E sees light first and triggers
-            if colorE.get_reflected_light() < lightValue:
-                #measuring the distance the robot has driven since it has seen the line
-                if(detectedLineDistance == 0):
-                    detectedLineDistance = drivenDistance
-                    detectedPort = 'E'
-
-                elif detectedPort == 'F':
-                    movement_motors.stop() #Stops robot with sensor F on the line
-                    angle = math.degrees(math.atan(((drivenDistance - detectedLineDistance) / 360 * circumference) / sensordistance)) #Calculating angle that needs to be turned using tangent
-                    gyroRotation(-1 * angle, -invert * 25, -invert * 30, -invert * 25, 0.2, 0.7, variant=1) #Standard gyrorotation for alignment, but inverting speed values if necessary
-                    movement_motors.stop() #Stopping robot for increased reliability
-                    break                
-
-            #Colour sensor F sees line first
-            elif colorF.get_reflected_light() < lightValue:
-                #measuring the distnace the robot has driven since it has seen the line
-                if(detectedLineDistance == 0):
-                    detectedLineDistance = drivenDistance
-                    detectedPort = 'F'
-
-                elif detectedPort == 'E':
-                    movement_motors.stop() #Stops robot with sensor E on the line
-                    angle = math.degrees(math.atan(((drivenDistance - detectedLineDistance) / 360 * circumference) / sensordistance)) #Calculationg angle that needs to be turned using tangent
-                    gyroRotation(angle, -invert * 25, -invert * 30, -invert * 25, 0.2, 0.7, variant=1) #Standard gyrorotation for alignment, but inverting speed values if necessary
-                    movement_motors.stop() #Stopping robot for increased reliablity
-                    break
+                    if colorF.get_reflected_light() < self.lightValue or cancel:
+                        self.leftMotor.stop()
+                        return True
                 
 
-        else:
-            #Sets colour sensor port to port specified by user
-            if abs(detectLineStartValue) < abs(drivenDistance):
-                if port != 0:
-                    colorSensor = ColorSensor(port)
+            #Colour sensor F sees line first
+            elif colorF.get_reflected_light() < self.lightValue:
 
-                    if lightValue < 50:
-                        #Stops loop based on colour detection
-                        if colorSensor.get_reflected_light() < lightValue:
-                            loop = False
-                    else:
-                        #Stops loop based on colour detection
-                        if colorSensor.get_reflected_light() > lightValue:
-                            loop = False
+                self.leftMotor.stop()
 
+                #Turning robot so that other colour sensor is over line
+                while True:
+                    self.rightMotor.start_at_power(int(self.speed))
 
-                #Calculation of speed and steering values
-                movement_motors.start_at_power(- int(speed), int(steering))
-                if rotateDistance < drivenDistance:
-                    movement_motors.stop()
-                    loop = False
-                    break
+                    #Line detection and stopping
+                    if colorE.get_reflected_light() < self.lightValue or cancel:
+                        self.rightMotor.stop()
+                        return True
+            
 
-        #Calculation of speed and steering values
-        movement_motors.start_at_power(- int(speed), invert * int(steering))
-        if abs(rotateDistance) < abs(drivenDistance):
-            movement_motors.stop()
-            loop = False
-            break
+            return False
 
-    #Stopping movement motors at the end of program for increased accuracy
-    movement_motors.stop()
-    smallMotorA.stop()
-    smallMotorD.stop()
-    run_generator = True
-    runSmall = True
+    class stopTangens():
+        """
+            Drive until a Line is detected
+            Parameters
+            -------------
+            db: the drivebase of the robot
+            port: Port to detect line on
+            lightvalue: Value of the light to detect
+            speed: Distance until start detecting a line
+            """
+        def __init__(self, db, lightvalue, speed):
+            self.count = 0
+            self = defaultClass(self, db)    
+            self.speed = speed
+            #if lightvalue bigger 50 stop when lightvalue is higher
+            self.lightValue = lightvalue
+            self.detectedLineDistance = 0
 
-    generator = 0
-    return #End of gyroStraightDrive
+            self.invert = 1
+            if speed < 0:
+                self.invert = -1
+            
+        def loop(self):
+            drivenDistance = getDrivenDistance(self)
+            if colorE.get_reflected_light() < self.lightValue:
+                    #measuring the distance the robot has driven since it has seen the line
+                    if(self.detectedLineDistance == 0):
+                        self.detectedLineDistance = getDrivenDistance(self)
+                        self.detectedPort = 'E'
 
-def speedCalculation(speed, startspeed, maxspeed, endspeed, accelerateDistance, brakeStartValue, drivenDistance, oldDrivenDistance):
+                    elif self.detectedPort == 'F':
+                        db.movement_motors.stop() #Stops robot with sensor F on the line
+                        angle = math.degrees(math.atan(((drivenDistance - self.detectedLineDistance) / 360 * circumference) / sensordistance)) #Calculating angle that needs to be turned using tangent
+                        #print("angle: " + str(angle))
+                        db.gyroRotation(-angle, self.invert * self.speed, self.invert * self.speed, self.invert * self.speed, rotate_mode=1) #Standard gyrorotation for alignment, but inverting speed values if necessary
+
+                        db.movement_motors.stop() #Stopping robot for increased reliability
+                        return True
+
+                #Colour sensor F sees line first
+            elif colorF.get_reflected_light() < self.lightValue:
+                #measuring the distnace the robot has driven since it has seen the line
+                if(self.detectedLineDistance == 0):
+                    self.detectedLineDistance = drivenDistance
+                    self.detectedPort = 'F'
+
+                elif self.detectedPort == 'E':
+                    db.movement_motors.stop() #Stops robot with sensor E on the line
+                    angle = math.degrees(math.atan(((drivenDistance - self.detectedLineDistance) / 360 * circumference) / sensordistance)) #Calculation angle that needs to be turned using tangent
+                    db.gyroRotation(angle, self.invert * self.speed, self.invert * self.speed, self.invert * self.speed, rotate_mode=1) #Standard gyrorotation for alignment, but inverting speed values if necessary
+                    db.movement_motors.stop() #Stopping robot for increased reliablity
+                    return True
+
+            return False
+    class stopDegree():
+        """
+            Roates until a certain degree is reached
+            Parameters            
+            -------------
+            db: the drivebase of the robot
+            angle: the angle to rotate
+        """
+        def __init__(self, db, angle):
+            self.angle = angle * (336/360)
+            
+            self.gyroStartValue = getGyroValue() #Yaw angle used due to orientation of the self.hub.
+            
+
+        def loop(self):
+            rotatedDistance = getGyroValue() #Yaw angle used due to orientation of the self.hub. 
+
+            if abs(self.angle) <= abs(rotatedDistance - self.gyroStartValue):
+                return True
+            else:
+                return False
+
+    class stopTime():
+
+        """
+            Drive until a certain time is reached
+            Parameters
+            -------------
+            db: the drivebase of the robot
+            time: the time to drive
+        """
+
+        def __init__(self, db, time) -> None:
+            self = defaultClass(self, db)
+            self.time = time
+            self.timer = Timer()
+            self.startTime = self.timer.now()
+
+        def loop(self):
+            if self.timer.now() > self.startTime + self.time:
+                return True
+            else:
+                return False
+       
+    class stopResistance():
+
+        """
+            Drive until the Robot doesn't move anymore
+            Parameters
+            -------------
+            db: the drivebase of the robot
+            restistance: the value the resistance has to be below to stop              
+        """
+        def __init__(self, db, resistance):
+            self = defaultClass(self, db)
+            self.resistance = resistance
+            self.timer = Timer()
+            
+            self.startTime = 0
+            self.lower = False
+            self.runs = 0
+
+        def loop(self):
+
+            self.runs += 1
+            motion = abs(hub2.motion.accelerometer(True)[2])
+
+            if motion < self.resistance:
+                self.lower = True
+
+            if self.runs > 15:
+                if self.lower:
+                    if self.startTime == 0:
+                        self.startTime = self.timer.now()
+
+                    if self.timer.now() > self.startTime:
+                        return True
+
+                else:
+                    self.lower = False
+                    return False
+                
+def motorResistance(speed, port, resistancevalue):
     """
-        Used to calculate all the speeds in out programs. Done seperatly to reduce redundancy. Brakes and accelerates. Is only meant to be accessed by programs
+    lets the motor stop when it hits an obstacle
+    """
+    if abs(resistancevalue) > abs(speed):
+        return
 
+        
+    if cancel:
+        return
+
+    if port == "A":
+        smallMotorA.start_at_power(speed)
+        while True:
+            old_position = smallMotorA.get_position()
+            wait_for_seconds(0.4)
+            if abs(old_position - smallMotorA.get_position())<resistancevalue or cancel:
+                smallMotorA.stop()
+                print("detected stalling")
+                return
+
+    elif port == "D":
+        smallMotorD.start_at_power(speed)
+        while True:
+            old_position = smallMotorD.get_position()
+            wait_for_seconds(0.4)
+            if abs(old_position - smallMotorD.get_position())<resistancevalue or cancel:
+                smallMotorD.stop()
+                print("detected stalling")
+                return
+    else:
+        print("wrong port selected. Select A or D")
+        return
+
+def speedCalculation(speed, startspeed, maxspeed, endspeed, accelerateDistance, deccelerateDistance, brakeStartValue, drivenDistance, oldDrivenDistance):
+    """
+        Used to calculate all the speeds in out programs. Done seperatly to reduce redundancy. Brakes and accelerates
         Parameters
         -------------
         speed: The current speed the robot has
-
         startspeed: Speed the robot starts at. Type: Integer. Default: No default value.
-
         maxspeed: The maximum speed the robot reaches. Type: Integer. Default: No default value.
-
         endspeed: Speed the robot aims for while braking, minimum speed at the end of the program. Type: Integer. Default: No default value.
-
         addspeed: Percentage of the distance after which the robot reaches the maximum speed. Type: Integer. Default: No default value.
-
         brakeStartValue: Percentage of the driven distance after which the robot starts braking. Type: Integer. Default: No default value.
-
         drivenDistance: Calculation of the driven distance in degrees. Type: Integer. Default: No default value.
-    """
+    """    
 
-    if cancel:
-        return
-    #Calculation of speed values for positive speeds
-    if speed > 0: #For positive speeds
-        if drivenDistance > 0: #For when starting value of motor is positive
-            if drivenDistance > brakeStartValue and speed > endspeed: #If robot is in breaking phase and faster than endspeed
-                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance #Calculation of slowing down factor per degree
-                speed = speed - (drivenDistance - oldDrivenDistance) * subSpeedPerDegree #Calculation of new speed
-            elif speed < maxspeed: #Else: robot must accelerate if maximum speed has not yet been reached
-                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance #Calculation of acceleration factor per degree
-                speed = speed + (drivenDistance - oldDrivenDistance) * addspeedPerDegree #Calculation of new speed
-        else: #For when starting value of motor is negative
-            if drivenDistance < brakeStartValue and speed > endspeed: #If robot is in breaking phase and faster than endspeed
-                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance #Calculation of slowing down factor per degree
-                speed = speed - (drivenDistance - oldDrivenDistance) * subSpeedPerDegree #Calculation of new speed
-            elif speed < maxspeed: #Else: robot must accelerate if maximum speed has not yet been reached
-                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance #Calculation of acceleration factor per degree
-                speed = speed + (drivenDistance - oldDrivenDistance) * addspeedPerDegree #Calculation of new speed
+    addSpeedPerDegree = (maxspeed - startspeed) / accelerateDistance 
+    subSpeedPerDegree = (maxspeed - endspeed) / deccelerateDistance
+    
 
-    else: #For negative speeds
-        if drivenDistance > 0: #For when starting value of motor is positive
-            if drivenDistance > brakeStartValue and speed < endspeed: #If robot is in breaking phase and faster than endspeed
-                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance #Calculation of slowing down factor per degree
-                speed = speed + (drivenDistance - oldDrivenDistance) * subSpeedPerDegree  #Calculation of new speed
-            elif speed > maxspeed: #Else: robot must accelerate if maximum speed has not yet been reached
-                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance #Calculation of acceleration factor per degree
-                speed = speed - (drivenDistance - oldDrivenDistance) * addspeedPerDegree  #Calculation of new speed
-        else: #For when starting value of motor is negative
-            if drivenDistance < brakeStartValue and speed < endspeed: #If robot is in breaking phase and faster than endspeed
-                subSpeedPerDegree = (maxspeed - endspeed) / accelerateDistance #Calculation of slowing down factor per degree
-                speed = speed + (drivenDistance - oldDrivenDistance) * subSpeedPerDegree  #Calculation of new speed
-            elif speed > maxspeed: #Else: robot must accelerate if maximum speed has not yet been reached
-                addspeedPerDegree = (maxspeed - startspeed) / accelerateDistance #Calculation of acceleration factor per degree
-                speed = speed - (drivenDistance - oldDrivenDistance) * addspeedPerDegree  #Calculation of new speed
+    subtraction = (abs(drivenDistance) - abs(oldDrivenDistance) if abs(drivenDistance) - abs(oldDrivenDistance) >= 1 else 1) * subSpeedPerDegree
+    addition = (abs(drivenDistance) - abs(oldDrivenDistance) if abs(drivenDistance) - abs(oldDrivenDistance) >= 1 else 1) * addSpeedPerDegree
+
+    if abs(drivenDistance) > abs(brakeStartValue):
+
+        if abs(speed) > abs(endspeed):
+            speed = speed - subtraction
+            
+    elif abs(speed) < abs(maxspeed):
+
+        speed = speed + addition
 
     return speed
 
-def breakFunction():
-    return False
-
-def driveMotor(rotations, speed, port):
+def breakFunction(args):
     """
-    Allows you to drive a small motor in parallel to driving with gyroStraightDrive
-
-    Parameters
-    -------------
-    rotations: the rotations the motor turns
-
-    speed: the speed at which the motor turns
-
-    port: the motor used. Note: this cannot be the same motors as configured in the motor Drivebase
+    Allows you to manually stop currently executing round but still stays in main. 
+    This is much quicker and more reliable than pressing the center button.
     """
-    global runSmall
-    global run_generator
-    while runSmall:
-        smallMotor = Motor(port)
-        smallMotor.set_degrees_counted(0)
-
-        loop_small = True
-        while loop_small:
-            drivenDistance = smallMotor.get_degrees_counted()
-            smallMotor.start_at_power(speed)
-            if (abs(drivenDistance) > abs(rotations) * 360):
-                loop_small = False
-            yield
-
-        smallMotor.stop()
-        runSmall = False
-        run_generator = False
-
-    yield
+    global cancel, inMain
+    if not inMain:
+        cancel = True
 
 def pidCalculation(speed):
     #golbally sets PID values based on current speed of the robot, allows for fast and accurate driving
@@ -654,16 +829,16 @@ def pidCalculation(speed):
     #Important note: These PID values are experimental and based on our design for the robot. You will need to adjust them manually. You can also set them statically as you can see below
     if speed > 0:
         pRegler = -0.17 * speed + 12.83
-        iRegler = 0.0006 * speed - 0.015
+        iRegler = 12
         dRegler = 1.94 * speed - 51.9
         if pRegler < 3.2:
             pRegler = 3.2
     else:
-        #static PID values due to currently noisy data. Working on a fix
-        pRegler = 2 
-        iRegler = 0
-        dRegler = 10
-
+        pRegler = (11.1 * abs(speed))/(0.5 * abs(speed) -7) - 20
+        iRegler = 10
+        #iRegler = 0.02
+        dRegler = 1.15**(- abs(speed)+49) + 88
+    
 def pidCalculationLight(speed):
     #Sets the PID values for the lineFollower based on current speed. Allows for accurate and fast driving
     #Important note: these PID values are experimental and based on our design for the robot. You will need to adjust them. See above on how to do so
@@ -676,118 +851,112 @@ def pidCalculationLight(speed):
     if dReglerLight < 5:
         dReglerLight = 5
 
-"""
-This is an introduction on how to use the driving programs. For accurate driving you will need to adjust the PID values to fit your
-robot and speeds you go at. There are tutorials online on how to do this. (For example see: https://www.youtube.com/watch?v=AMBWV_HGYj4 )
-We recommend that you try to align yourself both with lines but also mechanically for example with walls or mission tasks on the mat.
-"""
+def driveMotor(rotations, speed, port):
+    """
+    Allows you to drive a small motor in parallel to driving with gyroStraightDrive
+    Parameters
+    -------------
+    rotations: the rotations the motor turns
+    speed: the speed at which the motor turns
+    port: the motor used. Note: this cannot be the same motors as configured in the motor Drivebase
+    """
+           
+    global runSmall
+    global run_generator
 
-def example1(): #How to use the gyro straight drive
-    gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8)
-    """
-    Most basic driving. The robot will go in a straight line for 20 centimeters if you adjusted the wheel circumference in the gyroStraighDrive.
-    The robot will start moving at a speed of 20, accelerate until it reaches a speed of 45 after 20% of the distance travelled and will start
-    slowing down back to 20 after 80% of the distance has been travelled.
-    By default all over values are set to 0 to reduce the amount of code
-    """
-    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
-    gyroStraightDrive(20,20,45,20,0.2, 0.8, "E", 25)
-    """
-    This is the same as before, but this time the robot stops when the light sensor on port E sees a light value lower than 25, in this case a black line.
-    The port can be adapted to any light sensor, as can the value. If it is under 50, the robot will stop at light values lower than 50, if it is above 50
-    then the robot looks for a light value greater than 50, for example a white line
-    """
-    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
-    gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8, 0,25, 1)
-    """
-    This is the same as the first gyroStraightDrive but the robot stops as soon as it sees a line, it doesn't matter on which port. As soon as the robot has
-    stopped, it drives the corresponding motor until the other light sensor also sees the specified light value. Be careful here, as internal lag can cause
-    the robot to overshoot the line, so make sure that you set your speed values accordingly
-    """
-    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
-    gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8, "E", 25, detectLineStart=0.6)
-    """
-    The robot will drive until it sees a line, as in the second gyroStraightDrive. However it only starts checking for the specified light value after 80% of the
-    distance has been driven. This is very useful if you want to skip lines but still drive with one function
-    """
-    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
-    gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8, offset=20)
-    """
-    This is the same as the basic driving of the first gyroStraightDrive. However the robot won't go straight but aim for a target value of 20
-    """
-    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
-    generator = driveMotor(5, 100, 'A') #Prepares parallel code execution to be run in next gyroStraightDrive
-    gyroStraightDrive(20, 20, 45, 20, 0.2, 0.8,generator=generator)
-    """
-    This is the same as the basic driving of the first gyroStraightDrive. However while it drives the robot also turns the "A" motor for 5 rotations.
-    Because of the weak single core CPU of the robot, this isn't natively supported and the calculation takes about half a second, during which
-    the robot waits. this can be avoided by giving every single generator a unique name and letting them calculate before the actual program starts.
-    """
+    if cancel:
+        runSmall = False
+        run_generator = False
+
+    while runSmall:
+        smallMotor = Motor(port)
+        smallMotor.set_degrees_counted(0)
+
+        loop_small = True
+        while loop_small:
+            drivenDistance = smallMotor.get_degrees_counted()
+            smallMotor.start_at_power(speed)
+            if (abs(drivenDistance) > abs(rotations) * 360):
+                loop_small = False
+            if cancel:
+                loop_small = False
+            yield
+
+        smallMotor.stop()
+        runSmall = False
+        run_generator = False
+    yield
+
+hub2.motion.yaw_pitch_roll(0)
+
+db = DriveBase(hub, 'B', 'C') #this lets us conveniently hand over our motors (B: left driver; C: right driver). This is necessary for the cancel function
+
+def exampleOne():
+    #This example aims to show all the options for following a line. See the specific documentation of the function for further information.
+    db.lineFollower(15, 25, 35, 25, 'E', 'left') #follows the left side of a line on the E sensor for 15cm. Accelerates from speed 25 to 35 and ends on 25 again
+    hub.left_button.wait_until_pressed()
+    db.lineFollower(15, 25, 35, 25, 'E', 'left', 0.4, 0.6) #same line follower as before but with a longer acceleration and breaking period
+    hub.left_button.wait_until_pressed()
+    db.lineFollower(15, 25, 35, 25, 'E', 'left', stopMethod=stopMethods.stopLine(db, 'F', 0.7)) #same linefollower as the first, but this time stopping, when the other sensor sees a black line after at least 70% of the driven distance
+    hub.left_button.wait_until_pressed()
+    db.lineFollower(15, 25, 35, 25, 'E', 'left', stopMethod=stopMethods.stopResistance(db, 20)) #same as first linefollower, but stops when desired resistance is reached. Test the resistance value based on your robot
+    hub.left_button.wait_until_pressed()
+    generator = driveMotor(5, 100, 'A')
+    db.lineFollower(15, 25, 35, 25, 'E', 'left', generator=generator) #same as first linefollower, but drives while turning the A-Motor for 5 rotations
+    hub.left_button.wait_until_pressed()
+    db.lineFollower(15, 25, 35, 25, 'E', 'left', stop=False) #same as first linefollower, but does not actively brake the motors. The transistion form this action to the next is then smoother
     return
 
-def example2(): #How to use the line follower
-    lineFollower(20, 20, 40, 20, 0.2, 0.8, "left", "E")
-    """
-    This is the most basic line follower. The robot will follow the line for 20 centimeters if you adjusted the wheel circumference in the line follower.
-    The robot will start moving at a speed of 20, accelerate until it reaches a speed of 45 after 20% of the distance travelled and will start
-    slowing down back to 20 after 80% of the distance has been travelled.
-    You have to specifiy the side of the line you want to go on, as this program keeps the robot on the edge of the line. This program is meant to be used
-    when the edge of the line is black and white, though you can adjust the target light value as needed. The port specified, in this case "E" states which port
-    the robot uses to follow the line.
-    """
-    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
-    lineFollower(20, 20, 40, 20, 0.2, 0.8, "left", "E", "F", 25)
-    """
-    This is the same as the first lineFollower except for the ending condition. This time, the robot stops when the "F" light sensor sees a value below 25. This is
-    exactly the same as it is on the gyroStraightDrive. The driveToLinePort cannot be the following port, as this port is already in use for following the line.
-    """
-    hub.left_button.wait_until_pressed() #Waits to execute next function until user presses left button
-    lineFollower(20, 20, 40, 20, 0.2, 0.8, "left", "E", "F", 25, 0.6)
-    """
-    This line follower is again similar to the gyroStraightDrive. The robot starts looking for the line after 60% of the distance has been travelled.
-    """
-    #parallel motor execution isn't implemented yet in the line follower, this feature will be patched in later though
+def exampleTwo():
+    #This example aims to show all the options for turning the robot. See the specific documentation of the function for further information.
+    db.gyroRotation(90, 25, 35, 25) #turns the robot 90° clockwise while accelerating from speed 25 to 35 and back down to 25
+    hub.left_button.wait_until_pressed()
+    db.gyroRotation(90, 25, 35, 25, 0.4, 0.5) #same turning as in first rotation but with longer acceleration/braking phase
+    hub.left_button.wait_until_pressed()
+    db.gyroRotation(90, 25, 35, 25, rotate_mode=1) #same turn as in first rotation but this time turning using only one wheel rather than turning on the spot. Your speeds may need to be higher for this
+    hub.left_button.wait_until_pressed()
+    db.gyroRotation(90, 25, 35, 25, stopMethod=stopMethods.stopAlign(db, 25, 25)) #aligns the robot with a line in turning path
+    hub.left_button.wait_until_pressed()
+    db.gyroRotation(90, 25, 35, 25, stopMethod=stopMethods.stopLine(db, 'E', 25, 0.7)) #turns until the robot sees a line on sensor E after at least 70% of turning
+    hub.left_button.wait_until_pressed()
+    db.gyroRotation(90, 25, 35, 25, stopMethod=stopMethods.stopTangens(db, 25, 25)) #aligns the robot like stopAlign but is a bit more precise
+    hub.left_button.wait_until_pressed()
+    #remaining parameters are the same as in linefollower. Please refer to exampleOne or the documentation of the individual functions
     return
 
-def example3(): #How to use the gyro rotation
-    gyroRotation(90, 20, 35, 20, 0.2, 0.8)
-    """
-    This is the most basic gyroRotation. The robot will turn clockwise 90°. It will start at a speed of 20 reach 35 after 20% of the angle has been reached and will 
-    start slowing down to 20 after 80% of the angle haas been turned. Using this variant, the robot will turn on the spot.
-    All other variables are set to be 0 to reduce the amount of code
-    """
-    gyroRotation(90, 20, 35, 20, 0.2, 0.8, "E", 30)
-    """
-    This is the same gyroRotation as in the first example. However the robot will also check for a light value less than 30 on the "E" light sensor. It will stop when 
-    it has reached one of the ending conditions
-    """
-    gyroRotation(90, 20, 35, 20, 0.2, 0.8, variant=1)
-    """
-    This is the same gyroRotation as in the first example. However, rather than turning on the spot it will only rotate the outer motor to turn in a curve like shape
-    """
-    gyroRotation(90, 20, 35, 20, 0.2, 0.8, "E", 30, detectLineStart=0.8)
-    """
-    This is the same gyroRotation as in the second example. However the robot will only start checking for the light value after 80% of the angle has been reached. 
-    This is useful when the robot also sweeps over areas of the same color but you don't want the robot to stop there
-    """
+def exampleThree():
+    #This example aims to show all the options for driving in a straight line. See the specific documentation of the function for further information.
+    db.gyroStraightDrive(30, 25, 35, 25) #drives in a straight line for 30cm
+    hub.left_button.wait_until_pressed()
+    db.gyroStraightDrive(30, 25, 55, 25, 0.1, 0.9) #same as first drive, but faster and with harder acceleration/braking
+    hub.left_button.wait_until_pressed()
+    db.gyroStraightDrive(30, 25, 35, 25, offset=15) #same as first drive, but aims 15° in clockwise direction as target orientation
+    #remaining features of code are explained in previous examples. Please refer to exampleOne, exampleTwo and additional documentation within individual functions
     return
 
-def example4(): #Write your own programs here
+def exampleFour():
+    #This example aims to show all the options for turning in a large curve. See the specific documentation of the function for further information.
+    db.arcRotation(5, 35, 25, 30, 25) #robot drives 35° on a circle with a radius of 5cm measured from the inside edge of the robot
+    #remaining features of code are explained in previous examples. Please refer to exampleOne, exampleTwo and additional documentation within individual functions
+    return
+    
+def exampleFive():
+    #add your own code here
+    
     
     return
-#shows the battery colours in different colours on the console if the voltage is low and the battery should be charged
+
+def exampleSix():
+    #add your own code here
+    
+    
+    return
+
 class bcolors:
     BATTERY = '\033[32m'
     BATTERY_LOW = '\033[31m'
 
     ENDC = '\033[0m'
-
-pRegler = 2.75
-iRegler = 0
-dRegler = 70
-
-
-
 
 pReglerLight = 1.6
 iReglerLight = 0.009
@@ -795,27 +964,33 @@ dReglerLight = 16
 
 accelerate = True
 
-print(dir(util.log))
-
-log.log_to_file("test")
+hub2.button.right.callback(breakFunction)
+gyroValue = 0
 
 
 #Battery voltage printout in console for monitoring charge
-if battery.voltage() < 8000:
-    print(bcolors.BATTERY_LOW + "battery voltage is to low: " + str(battery.voltage()) + bcolors.ENDC)
+if battery.voltage() < 8000: #set threshold for battery level
+    print(bcolors.BATTERY_LOW + "battery voltage is too low: " + str(battery.voltage()) + " \n ----------------------------- \n >>>> please charge robot <<<< \n ----------------------------- \n"+ bcolors.ENDC)
 else:
     print(bcolors.BATTERY + "battery voltage: " + str(battery.voltage()) + bcolors.ENDC)
 
 
-
 #User Interface in Program for competition and instant program loading
-program = True
+main = True
+
+
 programselect = 1 #Set the attachment the selection program starts on
-hub.status_light.on('blue')
 hub.light_matrix.write(programselect)
-while program:
+db.movement_motors.set_stop_action("hold") #hold motors on wait for increased reliability
+
+
+
+while main:
     cancel = False
+    inMain = True
+
     #Program selection
+    
     if hub.right_button.is_pressed(): #press right button to cycle through programs. cycling back isn't supported yet, but we are working on reallocating the buttons in the file system
         wait_for_seconds(0.15) #waiting prevents a single button press to be registered as multiple clicks
         programselect = programselect + 1
@@ -829,35 +1004,57 @@ while program:
         elif programselect == 3:
             hub.status_light.on('white')
         elif programselect == 4:
-            hub.status_light.on("red")
-        if programselect == 5: #Add more slots as necessary, you will need to match the amount of slots to the starting slots
+            hub.status_light.on('white')
+        elif programselect == 5:
+            hub.status_light.on('red')        
+        elif programselect == 6:
+            hub.status_light.on('orange')
+        #cycle to start of stack
+        if programselect == 7:
             programselect = 1
             hub.light_matrix.write(programselect)
             hub.status_light.on('blue')
 
     #Program start
-    if hub.left_button.is_pressed(): #press left button to start the selected program
-        hub.speaker.beep(85, 0.1)
-        if programselect == 1: #starts first program
+    if hub.left_button.is_pressed():
+        inMain = False
+
+        if programselect == 1:
+            hub.status_light.on("blue")
             hub.light_matrix.show_image("DUCK")
-            example1()
+            exampleOne()
             programselect = 2
+            hub.light_matrix.write(programselect)
+        elif programselect == 2:
             hub.status_light.on("black")
-            hub.light_matrix.write(programselect)
-        elif programselect == 2: #starts second program
             hub.light_matrix.show_image("DUCK")
-            example2()
+            exampleTwo()
             programselect = 3
+            hub.light_matrix.write(programselect)
+        elif programselect == 3:
             hub.status_light.on("white")
-            hub.light_matrix.write(programselect)
-        elif programselect == 3: #starts third program
             hub.light_matrix.show_image("DUCK")
-            example3()
+            exampleThree()
+            programselect = 5
             hub.light_matrix.write(programselect)
-        elif programselect == 4: #starts fourth program
+        elif programselect == 4:
+            hub.status_light.on('white')
+            hub.light_matrix.show_image('DUCK')
+            exampleFour()
+            programselect = 5
+            hub.light_matrix.write(programselect)
+        elif programselect == 5:
+            hub.status_light.on("red")
             hub.light_matrix.show_image("DUCK")
-            example4()
-            hub.light_matrix.write(programselect) #add more slots for programs as you wish
-programselect=0 #reset variable to prevent bugs with multiple runs
+            exampleFive()
+            programselect = 6
+            hub.light_matrix.write(programselect)
+        elif programselect == 6:
+            hub.status_light.on("orange")
+            hub.light_matrix.show_image("DUCK")
+            exampleSix()
+            programselect = 1
+            hub.light_matrix.write(programselect)
+
 
 sys.exit("ended program successfully")
