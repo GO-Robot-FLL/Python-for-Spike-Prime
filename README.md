@@ -1,6 +1,6 @@
 # Python-for-Spike-Prime
 These are some basic programs that are useful if you are building and programming the LEGO SPIKE PRIME.
-We use this code for competing in the FLL. If there are any bugs or you have any questions please notify us.
+We use this code for competing in the FLL.
 We strongly recommend that you use VS Code for your programming, the instructions for doing so are below.
 You can however also paste this into the SPIKE or MINDSTORMS software.
 
@@ -19,6 +19,14 @@ You can however also paste this into the SPIKE or MINDSTORMS software.
 - dynamic PID control for smooth driving
 - alignment with lines
 - parallel code execution for turning motors while driving
+#### Arc Rotation
+- turns in a large arc, to be able to turn around objects until ending condition is reached
+- accelerating breaking
+- various ending conditions
+#### Break Function
+- allows you to break out of currently running function back into main
+- press right button to activat
+- save significant amounts of time and is less prone to crashing the hub than middle button
 
 
 ## Necessary extensions/Programs for use in VS Code:
@@ -48,6 +56,10 @@ Note: This step can be skipped if you have autostart activated.
 To precompile the main.py on the PC go to the extension page and select the extension
 then click on the settings symbol and activate Lego Spike Prime Mindstorms: Compile Before Upload.
 This will allow the program to start faster
+
+## Reporting Bugs:
+If you find a bug, kindly report it to go.robot@gmynasium-ottobrunn.de 
+We will try to fix it as soon as possible. If you have any questions regarding the code, please reach out to us using the same Email adress.
 
 ## For further info on working with Spike Prime in VS Code see:
 https://github.com/PeterStaev/lego-spikeprime-mindstorms-vscode
