@@ -233,7 +233,9 @@ class DriveBase:
 
             oldRotatedDistance = rotatedDistance
             rotatedDistance = getGyroValue() #Yaw angle used due to orientation of the self.hub. This might need to be changed
-
+            speed = speedCalculation(speed, startspeed, maxspeed, endspeed, accelerateDistance, deccelerateDistance, brakeStartValue, abs(1), abs(0))
+            
+            
             #Checking for variants
             #Both Motors turn, robot moves on the spot
             if rotate_mode == 0:
@@ -405,7 +407,7 @@ class DriveBase:
         if generator == None:
             run_generator = False
 
-        angle = angle * (336/360) #gyro calibration
+        angle = angle * (2400/2443) #gyro calibration
         
         gyroStartValue = getGyroValue()
         finalGyroValue = gyroStartValue + angle
